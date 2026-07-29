@@ -39,9 +39,10 @@ cp "${bin_path}/HubrisVoice" "${stage_app}/Contents/MacOS/HubrisVoice"
 cp "${repo_dir}/Support/Info.plist" "${stage_app}/Contents/Info.plist"
 
 plutil -lint "${stage_app}/Contents/Info.plist"
+signing_identity="$("${repo_dir}/Scripts/resolve-signing-identity.sh")"
 codesign \
   --force \
-  --sign - \
+  --sign "${signing_identity}" \
   --identifier com.jimeh.HubrisVoice \
   "${stage_app}"
 

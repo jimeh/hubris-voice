@@ -21,5 +21,9 @@ let package = Package(
       name: "HubrisVoiceCoreTests",
       dependencies: ["HubrisVoiceCore"]
     ),
+    .testTarget(
+      name: "HubrisVoiceAppTests",
+      dependencies: ["HubrisVoiceApp"]
+    ),
   ]
 )

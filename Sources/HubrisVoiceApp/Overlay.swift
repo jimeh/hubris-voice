@@ -1,11 +1,13 @@
 import AppKit
 import Combine
+import HubrisVoiceCore
 import SwiftUI
 
 enum OverlayMode: Equatable {
   case listening
   case finalizing
   case completed
+  case copied
   case attention
 
   var title: String {
@@ -16,6 +18,8 @@ enum OverlayMode: Equatable {
       "Finalizing"
     case .completed:
       "Pasted"
+    case .copied:
+      "Copied"
     case .attention:
       "Transcript ready"
     }
@@ -27,7 +31,7 @@ enum OverlayMode: Equatable {
       .signalBlue
     case .finalizing, .attention:
       .voiceCoral
-    case .completed:
+    case .completed, .copied:
       .completionMint
     }
   }
@@ -41,6 +45,10 @@ final class OverlayViewModel: ObservableObject {
   @Published var elapsed: TimeInterval = 0
   @Published var levels: [Float] = Array(repeating: 0.08, count: 22)
   @Published var canCopy = false
+
+  var transcriptViewportHeight: CGFloat {
+    OverlayLayout.transcriptViewportHeight(for: transcript)
+  }
 
   func beginListening() {
     mode = .listening
@@ -59,15 +67,40 @@ final class OverlayViewModel: ObservableObject {
 
 @MainActor
 final class OverlayController {
+  private let model: OverlayViewModel
   private let panel: NSPanel
+  private let hostingView: NSHostingView<OverlayView>
+  private var cancellables: Set<AnyCancellable> = []
+
+  var panelFrame: NSRect {
+    panel.frame
+  }
+
+  var hostingSizingOptions: NSHostingSizingOptions {
+    hostingView.sizingOptions
+  }
 
   init(
     model: OverlayViewModel,
     onCopy: @escaping () -> Void,
     onDismiss: @escaping () -> Void
   ) {
+    self.model = model
+    hostingView = NSHostingView(
+      rootView: OverlayView(
+        model: model,
+        onCopy: onCopy,
+        onDismiss: onDismiss
+      )
+    )
+    hostingView.sizingOptions = []
     panel = NSPanel(
-      contentRect: NSRect(x: 0, y: 0, width: 540, height: 178),
+      contentRect: NSRect(
+        x: 0,
+        y: 0,
+        width: OverlayLayout.panelWidth,
+        height: OverlayLayout.panelHeight(for: "")
+      ),
       styleMask: [.borderless, .nonactivatingPanel],
       backing: .buffered,
       defer: true
@@ -84,22 +117,41 @@ final class OverlayController {
     panel.hidesOnDeactivate = false
     panel.isFloatingPanel = true
     panel.becomesKeyOnlyIfNeeded = true
-    panel.contentView = NSHostingView(
-      rootView: OverlayView(
-        model: model,
-        onCopy: onCopy,
-        onDismiss: onDismiss
-      )
-    )
+    panel.contentView = hostingView
+
+    model.$transcript
+      .removeDuplicates()
+      .sink { [weak self] transcript in
+        self?.resizeForTranscript(transcript)
+      }
+      .store(in: &cancellables)
   }
 
   func show() {
+    resizeForTranscript(model.transcript)
     positionOnActiveScreen()
     panel.orderFrontRegardless()
   }
 
   func hide() {
     panel.orderOut(nil)
+  }
+
+  private func resizeForTranscript(_ transcript: String) {
+    let height = OverlayLayout.panelHeight(for: transcript)
+    guard abs(panel.frame.height - height) > 0.5 else {
+      return
+    }
+
+    panel.setFrame(
+      NSRect(
+        x: panel.frame.minX,
+        y: panel.frame.minY,
+        width: OverlayLayout.panelWidth,
+        height: height
+      ),
+      display: true
+    )
   }
 
   private func positionOnActiveScreen() {
@@ -144,17 +196,35 @@ private struct OverlayView: View {
           .foregroundStyle(Color.fog.opacity(0.58))
       }
 
-      Text(
-        model.transcript.isEmpty
-          ? "Start speaking…"
-          : model.transcript
-      )
-      .font(.system(size: 18, weight: .medium, design: .rounded))
-      .foregroundStyle(
-        model.transcript.isEmpty ? Color.fog.opacity(0.42) : .fog
-      )
-      .lineLimit(2)
-      .frame(maxWidth: .infinity, minHeight: 44, alignment: .topLeading)
+      ScrollViewReader { proxy in
+        ScrollView(.vertical) {
+          VStack(alignment: .leading, spacing: 0) {
+            Text(
+              model.transcript.isEmpty
+                ? "Start speaking…"
+                : model.transcript
+            )
+            .font(
+              .system(size: 18, weight: .medium, design: .rounded)
+            )
+            .foregroundStyle(
+              model.transcript.isEmpty ? Color.fog.opacity(0.42) : .fog
+            )
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+
+            Color.clear
+              .frame(height: 1)
+              .id(TranscriptScrollAnchor.bottom)
+          }
+        }
+        .scrollIndicators(.hidden)
+        .frame(height: model.transcriptViewportHeight)
+        .defaultScrollAnchor(.bottom)
+        .onChange(of: model.transcript) {
+          proxy.scrollTo(TranscriptScrollAnchor.bottom, anchor: .bottom)
+        }
+      }
 
       AudioInkView(
         levels: model.levels,
@@ -180,6 +250,11 @@ private struct OverlayView: View {
     }
     .padding(.horizontal, 20)
     .padding(.vertical, 16)
+    .frame(
+      maxWidth: .infinity,
+      maxHeight: .infinity,
+      alignment: .topLeading
+    )
     .background {
       RoundedRectangle(cornerRadius: 18, style: .continuous)
         .fill(Color.carbon.opacity(0.96))
@@ -218,6 +293,65 @@ private struct AudioInkView: View {
       reduceMotion ? nil : .easeOut(duration: 0.08),
       value: levels
     )
+  }
+}
+
+private enum TranscriptScrollAnchor {
+  static let bottom = "transcript-bottom"
+}
+
+@MainActor
+private enum OverlayLayout {
+  static let panelWidth: CGFloat = 540
+  static let minimumTranscriptHeight: CGFloat = 44
+  static let maximumTranscriptHeight: CGFloat = 132
+  static let panelChromeHeight: CGFloat = 134
+  static let transcriptWidth: CGFloat = panelWidth - 56
+
+  static let policy = OverlayLayoutPolicy(
+    minimumTranscriptHeight: Double(minimumTranscriptHeight),
+    maximumTranscriptHeight: Double(maximumTranscriptHeight),
+    panelChromeHeight: Double(panelChromeHeight)
+  )
+
+  private static let transcriptFont: NSFont = {
+    let base = NSFont.systemFont(ofSize: 18, weight: .medium)
+    guard
+      let descriptor = base.fontDescriptor.withDesign(.rounded),
+      let rounded = NSFont(descriptor: descriptor, size: 18)
+    else {
+      return base
+    }
+    return rounded
+  }()
+
+  static func transcriptViewportHeight(for transcript: String) -> CGFloat {
+    CGFloat(
+      policy.transcriptViewportHeight(
+        measuredTextHeight: Double(measuredTextHeight(for: transcript))
+      )
+    )
+  }
+
+  static func panelHeight(for transcript: String) -> CGFloat {
+    CGFloat(
+      policy.panelHeight(
+        measuredTextHeight: Double(measuredTextHeight(for: transcript))
+      )
+    )
+  }
+
+  private static func measuredTextHeight(for transcript: String) -> CGFloat {
+    let text = transcript.isEmpty ? "Start speaking…" : transcript
+    let bounds = (text as NSString).boundingRect(
+      with: NSSize(
+        width: transcriptWidth,
+        height: .greatestFiniteMagnitude
+      ),
+      options: [.usesLineFragmentOrigin, .usesFontLeading],
+      attributes: [.font: transcriptFont]
+    )
+    return ceil(bounds.height)
   }
 }
 

@@ -1,0 +1,22 @@
+import XCTest
+
+@testable import HubrisVoiceApp
+
+@MainActor
+final class OverlayControllerTests: XCTestCase {
+  func testTranscriptGrowthLeavesWindowSizingToTheController() {
+    let model = OverlayViewModel()
+    let controller = OverlayController(
+      model: model,
+      onCopy: {},
+      onDismiss: {}
+    )
+    let initialBottomEdge = controller.panelFrame.minY
+
+    model.transcript = String(repeating: "A growing transcript. ", count: 30)
+
+    XCTAssertTrue(controller.hostingSizingOptions.isEmpty)
+    XCTAssertGreaterThan(controller.panelFrame.height, 178)
+    XCTAssertEqual(controller.panelFrame.minY, initialBottomEdge)
+  }
+}

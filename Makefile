@@ -4,6 +4,7 @@ build:
 	swift build
 
 test:
+	./Tests/SigningIdentityResolverTests.sh
 	swift test
 
 bundle:

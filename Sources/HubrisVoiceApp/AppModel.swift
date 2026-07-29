@@ -88,10 +88,10 @@ final class AppModel: ObservableObject {
   private let keychain = KeychainStore()
   private let defaults: UserDefaults
   private let snippetPolicy = SnippetPolicy()
+  private let overlayDismissalScheduler = DelayedActionScheduler()
 
   private var eventTask: Task<Void, Never>?
   private var elapsedTask: Task<Void, Never>?
-  private var completionTask: Task<Void, Never>?
   private var isStarted = false
   private var isSessionReady = false
   private var isShortcutRunning = false
@@ -251,12 +251,14 @@ final class AppModel: ObservableObject {
       return
     }
     insertionService.copy(overlayModel.transcript)
-    overlayModel.mode = .completed
+    overlayModel.mode = .copied
     overlayModel.message = "Copied to the clipboard"
     overlayModel.canCopy = false
+    scheduleOverlayDismissal()
   }
 
   func dismissOverlay() {
+    overlayDismissalScheduler.cancel()
     overlayController?.hide()
     resetAfterSnippet()
   }
@@ -306,7 +308,7 @@ final class AppModel: ObservableObject {
   }
 
   private func beginDictation() {
-    completionTask?.cancel()
+    overlayDismissalScheduler.cancel()
     guard
       !apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         .isEmpty
@@ -438,14 +440,7 @@ final class AppModel: ObservableObject {
       overlayModel.mode = .completed
       overlayModel.message = "Inserted into the focused field"
       overlayModel.canCopy = false
-      completionTask = Task { [weak self] in
-        try? await Task.sleep(for: .milliseconds(850))
-        guard !Task.isCancelled else {
-          return
-        }
-        self?.overlayController?.hide()
-        self?.resetAfterSnippet()
-      }
+      scheduleOverlayDismissal()
     } else {
       overlayModel.mode = .attention
       overlayModel.message =
@@ -453,6 +448,14 @@ final class AppModel: ObservableObject {
         ? "No editable field was captured · copy instead"
         : "Focus changed · copy instead"
       overlayModel.canCopy = true
+    }
+  }
+
+  private func scheduleOverlayDismissal() {
+    overlayDismissalScheduler.schedule(after: .milliseconds(850)) {
+      [weak self] in
+      self?.overlayController?.hide()
+      self?.resetAfterSnippet()
     }
   }
 
