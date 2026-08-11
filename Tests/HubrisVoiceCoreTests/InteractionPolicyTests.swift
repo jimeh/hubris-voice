@@ -133,4 +133,119 @@ final class InteractionPolicyTests: XCTestCase {
       )
     )
   }
+
+  func testPasteSafetyAllowsApplicationFallbackOnlyForWeakCapture() {
+    let weakTarget = FocusSnapshot(
+      processID: 100,
+      elementToken: nil,
+      isSecure: false
+    )
+
+    XCTAssertEqual(
+      PasteSafety.decision(captured: weakTarget, current: weakTarget),
+      .sameApplication
+    )
+    XCTAssertEqual(
+      PasteSafety.decision(
+        captured: weakTarget,
+        current: FocusSnapshot(
+          processID: 100,
+          elementToken: "editor-1",
+          isSecure: false
+        )
+      ),
+      .sameApplication
+    )
+    XCTAssertEqual(
+      PasteSafety.decision(
+        captured: weakTarget,
+        current: FocusSnapshot(
+          processID: 200,
+          elementToken: nil,
+          isSecure: false
+        )
+      ),
+      .rejected
+    )
+  }
+
+  func testPasteSafetyRejectsChangedOrSecureStrongTargets() {
+    let target = FocusSnapshot(
+      processID: 100,
+      elementToken: "editor-1",
+      isSecure: false
+    )
+
+    XCTAssertEqual(
+      PasteSafety.decision(
+        captured: target,
+        current: FocusSnapshot(
+          processID: 100,
+          elementToken: nil,
+          isSecure: false
+        )
+      ),
+      .rejected
+    )
+    XCTAssertEqual(
+      PasteSafety.decision(
+        captured: target,
+        current: FocusSnapshot(
+          processID: 100,
+          elementToken: "editor-1",
+          isSecure: true
+        )
+      ),
+      .rejected
+    )
+  }
+
+  func testPasteConfirmationRequiresAnObservableTextStateChange() {
+    let before = AccessibleTextState(
+      value: "Hello",
+      selectionLocation: 5,
+      selectionLength: 0
+    )
+
+    XCTAssertEqual(
+      PasteConfirmation.outcome(
+        before: before,
+        after: AccessibleTextState(
+          value: "Hello world",
+          selectionLocation: 11,
+          selectionLength: 0
+        )
+      ),
+      .confirmed
+    )
+    XCTAssertEqual(
+      PasteConfirmation.outcome(before: before, after: before),
+      .attempted
+    )
+    XCTAssertEqual(
+      PasteConfirmation.outcome(before: nil, after: before),
+      .attempted
+    )
+  }
+
+  func testSingleInstancePolicyRejectsAnotherRunningProcess() {
+    XCTAssertFalse(
+      SingleInstancePolicy.shouldTerminate(
+        currentProcessID: 100,
+        runningProcessIDs: []
+      )
+    )
+    XCTAssertFalse(
+      SingleInstancePolicy.shouldTerminate(
+        currentProcessID: 100,
+        runningProcessIDs: [100]
+      )
+    )
+    XCTAssertTrue(
+      SingleInstancePolicy.shouldTerminate(
+        currentProcessID: 100,
+        runningProcessIDs: [100, 200]
+      )
+    )
+  }
 }

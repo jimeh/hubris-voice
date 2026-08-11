@@ -1,4 +1,5 @@
 import AppKit
+import HubrisVoiceCore
 import SwiftUI
 
 @MainActor
@@ -26,12 +27,42 @@ final class AppEnvironment {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+  private var isDuplicateInstance = false
+
+  func applicationWillFinishLaunching(_ notification: Notification) {
+    guard let bundleIdentifier = Bundle.main.bundleIdentifier else {
+      return
+    }
+
+    let currentProcessID = ProcessInfo.processInfo.processIdentifier
+    let runningProcessIDs = NSRunningApplication.runningApplications(
+      withBundleIdentifier: bundleIdentifier
+    ).map(\.processIdentifier)
+    guard
+      SingleInstancePolicy.shouldTerminate(
+        currentProcessID: currentProcessID,
+        runningProcessIDs: runningProcessIDs
+      )
+    else {
+      return
+    }
+
+    isDuplicateInstance = true
+    NSApplication.shared.terminate(nil)
+  }
+
   func applicationDidFinishLaunching(_ notification: Notification) {
+    guard !isDuplicateInstance else {
+      return
+    }
     NSApplication.shared.setActivationPolicy(.accessory)
     AppEnvironment.shared.model.start()
   }
 
   func applicationDidBecomeActive(_ notification: Notification) {
+    guard !isDuplicateInstance else {
+      return
+    }
     AppEnvironment.shared.model.refreshPermissions()
   }
 }

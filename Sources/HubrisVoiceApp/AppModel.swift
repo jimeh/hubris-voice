@@ -10,7 +10,7 @@ enum AppPhase: Equatable {
   case ready
   case listening
   case finalizing
-  case result(didPaste: Bool)
+  case result(PasteOutcome)
   case error(String)
 
   var title: String {
@@ -25,8 +25,12 @@ enum AppPhase: Equatable {
       "Listening"
     case .finalizing:
       "Finalizing"
-    case .result(let didPaste):
-      didPaste ? "Pasted" : "Transcript ready"
+    case .result(.confirmed):
+      "Pasted"
+    case .result(.attempted):
+      "Paste attempted"
+    case .result(.rejected):
+      "Transcript ready"
     case .error:
       "Needs attention"
     }
@@ -34,11 +38,12 @@ enum AppPhase: Equatable {
 
   var statusColor: Color {
     switch self {
-    case .ready, .result(didPaste: true):
+    case .ready, .result(.confirmed):
       .completionMint
     case .listening:
       .signalBlue
-    case .connecting, .finalizing, .result(didPaste: false):
+    case .connecting, .finalizing, .result(.attempted),
+      .result(.rejected):
       .voiceCoral
     case .needsSetup, .error:
       .secondary
@@ -413,7 +418,9 @@ final class AppModel: ObservableObject {
       guard activeItemID == itemID, let completion else {
         return
       }
-      completeSnippet(completion.text)
+      Task { [weak self] in
+        await self?.completeSnippet(completion.text)
+      }
     case .error(let message):
       isSessionReady = false
       showError(message, inOverlay: audioCapture.isRunning || phase == .finalizing)
@@ -422,7 +429,7 @@ final class AppModel: ObservableObject {
     }
   }
 
-  private func completeSnippet(_ rawText: String) {
+  private func completeSnippet(_ rawText: String) async {
     let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty else {
       showError("No speech was detected.", inOverlay: true)
@@ -430,29 +437,39 @@ final class AppModel: ObservableObject {
     }
 
     overlayModel.transcript = text
-    let didPaste =
-      capturedFocus.map {
-        insertionService.paste(text, into: $0)
-      } ?? false
-    phase = .result(didPaste: didPaste)
+    let outcome: PasteOutcome
+    if let capturedFocus {
+      outcome = await insertionService.paste(text, into: capturedFocus)
+    } else {
+      outcome = .rejected
+    }
+    phase = .result(outcome)
 
-    if didPaste {
+    switch outcome {
+    case .confirmed:
       overlayModel.mode = .completed
       overlayModel.message = "Inserted into the focused field"
       overlayModel.canCopy = false
       scheduleOverlayDismissal()
-    } else {
+    case .attempted:
+      overlayModel.mode = .attention
+      overlayModel.message = "Paste attempted · copy if needed"
+      overlayModel.canCopy = true
+      scheduleOverlayDismissal(after: .seconds(4))
+    case .rejected:
       overlayModel.mode = .attention
       overlayModel.message =
         capturedFocus == nil
-        ? "No editable field was captured · copy instead"
-        : "Focus changed · copy instead"
+        ? "No target app was captured · copy instead"
+        : "Focus or app changed · copy instead"
       overlayModel.canCopy = true
     }
   }
 
-  private func scheduleOverlayDismissal() {
-    overlayDismissalScheduler.schedule(after: .milliseconds(850)) {
+  private func scheduleOverlayDismissal(
+    after delay: Duration = .milliseconds(850)
+  ) {
+    overlayDismissalScheduler.schedule(after: delay) {
       [weak self] in
       self?.overlayController?.hide()
       self?.resetAfterSnippet()

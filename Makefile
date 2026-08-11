@@ -4,6 +4,7 @@ build:
 	swift build
 
 test:
+	./Tests/BundleMetadataTests.sh
 	./Tests/SigningIdentityResolverTests.sh
 	swift test
 

@@ -102,24 +102,95 @@ public struct SnippetPolicy: Equatable, Sendable {
 
 public struct FocusSnapshot: Equatable, Sendable {
   public let processID: Int32
-  public let elementToken: String
+  public let elementToken: String?
   public let isSecure: Bool
 
-  public init(processID: Int32, elementToken: String, isSecure: Bool) {
+  public init(
+    processID: Int32,
+    elementToken: String?,
+    isSecure: Bool
+  ) {
     self.processID = processID
     self.elementToken = elementToken
     self.isSecure = isSecure
   }
 }
 
+public enum PasteDecision: Equatable, Sendable {
+  case exactElement
+  case sameApplication
+  case rejected
+}
+
+public enum PasteOutcome: Equatable, Sendable {
+  case confirmed
+  case attempted
+  case rejected
+}
+
 public enum PasteSafety {
+  public static func decision(
+    captured: FocusSnapshot,
+    current: FocusSnapshot
+  ) -> PasteDecision {
+    guard
+      !captured.isSecure,
+      !current.isSecure,
+      captured.processID == current.processID
+    else {
+      return .rejected
+    }
+
+    guard let capturedElementToken = captured.elementToken else {
+      return .sameApplication
+    }
+    guard current.elementToken == capturedElementToken else {
+      return .rejected
+    }
+    return .exactElement
+  }
+
   public static func canPaste(
     captured: FocusSnapshot,
     current: FocusSnapshot
   ) -> Bool {
-    !captured.isSecure
-      && !current.isSecure
-      && captured.processID == current.processID
-      && captured.elementToken == current.elementToken
+    decision(captured: captured, current: current) != .rejected
+  }
+}
+
+public struct AccessibleTextState: Equatable, Sendable {
+  public let value: String?
+  public let selectionLocation: Int?
+  public let selectionLength: Int?
+
+  public init(
+    value: String?,
+    selectionLocation: Int?,
+    selectionLength: Int?
+  ) {
+    self.value = value
+    self.selectionLocation = selectionLocation
+    self.selectionLength = selectionLength
+  }
+}
+
+public enum PasteConfirmation {
+  public static func outcome(
+    before: AccessibleTextState?,
+    after: AccessibleTextState?
+  ) -> PasteOutcome {
+    guard let before, let after, before != after else {
+      return .attempted
+    }
+    return .confirmed
+  }
+}
+
+public enum SingleInstancePolicy {
+  public static func shouldTerminate(
+    currentProcessID: Int32,
+    runningProcessIDs: [Int32]
+  ) -> Bool {
+    runningProcessIDs.contains { $0 != currentProcessID }
   }
 }

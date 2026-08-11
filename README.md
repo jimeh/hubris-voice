@@ -7,6 +7,8 @@ Hold `Control-Shift-Space` to record. A non-activating overlay shows the live
 transcript. Release the shortcut to commit the audio; the finalized transcript
 is pasted into the text field that was focused when recording began. If focus
 changes, the app keeps the transcript in the overlay and offers Copy instead.
+Electron apps get a guarded same-app paste attempt when Chromium does not expose
+the focused field through macOS Accessibility.
 
 ## Current scope
 
@@ -17,6 +19,8 @@ changes, the app keeps the transcript in the overlay and offers Copy instead.
 - API key stored in the macOS login Keychain
 - Explicit Microphone and Accessibility permission controls
 - Clipboard preservation after synthetic `Command-V`
+- Electron accessibility activation with paste-attempt feedback
+- Launch Services and runtime protection against duplicate app instances
 - Local cancellation of accidental presses shorter than 200 ms
 
 This is a bring-your-own-key developer proof of concept. A distributed product
