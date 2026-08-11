@@ -36,7 +36,7 @@ Store distribution.
 
 ```text
 Global shortcut ─┐
-                 ├─ DictationCoordinator ─ OverlayPresenter
+                 ├─ AppModel ───────────── OverlayController
 Microphone ──────┘          │
                             ├─ RealtimeTranscriptionClient
                             │    └─ one warm WebSocket, many commits
@@ -50,6 +50,11 @@ The testable core owns dictionary validation, shortcut matching, wire-event
 encoding/decoding, per-item transcript assembly, and paste-safety decisions.
 AppKit, audio, Keychain, event taps, and WebSocket transport stay at system
 boundaries.
+
+Electron editors that do not expose a focused Accessibility element use a
+strict same-process fallback. Paste outcomes distinguish confirmed insertion,
+an unconfirmed attempt, and rejection. Launch Services metadata and an early
+runtime process check prevent duplicate app instances.
 
 ## Interaction and visual design
 
@@ -123,11 +128,13 @@ ink. No decorative gradients, chat bubbles, or dashboard cards.
 - Unit tests: happy and failure cases for every core decision.
 - Protocol fixtures: session configuration, partial/final/error/unknown server
   events, malformed payloads, and out-of-order item completion.
-- Build verification: `swift build`, `swift test`, release bundle assembly,
-  `plutil`, and `codesign --verify`.
-- Manual verification later, with the user present: microphone permission,
-  Accessibility permission, shortcut hold/release, live overlay, OpenAI
-  connection, focus-change protection, and paste into multiple applications.
+- Automated verification: `mise run check` covers formatting, linting,
+  compilation, metadata checks, signing-resolver tests, and Swift tests;
+  `mise run verify` adds release bundle assembly and strict code-sign checks.
+- Manual verification with the user present: microphone and Accessibility
+  permission flows, shortcut hold/release, live overlay, OpenAI connection,
+  focus-change and secure-field protection, confirmed paste into native apps,
+  attempted paste into Electron apps, and duplicate-launch protection.
 
 ## Deferred questions
 

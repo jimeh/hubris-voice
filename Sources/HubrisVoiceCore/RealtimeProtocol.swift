@@ -9,7 +9,7 @@ public enum RealtimeAPI {
     components.host = "api.openai.com"
     components.path = "/v1/realtime"
     components.queryItems = [
-      URLQueryItem(name: "intent", value: "transcription")
+      URLQueryItem(name: "intent", value: "transcription"),
     ]
     return components.url
   }
@@ -58,7 +58,7 @@ public enum RealtimeClientEvent: Equatable, Sendable {
   private var jsonObject: [String: Any] {
     switch self {
     case .sessionUpdate(let configuration):
-      return [
+      [
         "type": "session.update",
         "session": [
           "type": "transcription",
@@ -76,23 +76,23 @@ public enum RealtimeClientEvent: Equatable, Sendable {
                 "delay": configuration.delay.rawValue,
               ],
               "turn_detection": NSNull(),
-            ]
+            ],
           ],
         ],
       ]
     case .appendAudio(let data):
-      return [
+      [
         "type": "input_audio_buffer.append",
         "audio": data.base64EncodedString(),
       ]
     case .commitAudio(let eventID):
-      return [
+      [
         "event_id": eventID,
         "type": "input_audio_buffer.commit",
       ]
     case .clearAudio:
-      return [
-        "type": "input_audio_buffer.clear"
+      [
+        "type": "input_audio_buffer.clear",
       ]
     }
   }
@@ -106,9 +106,9 @@ public enum RealtimeServerEvent: Equatable, Sendable {
     public var errorDescription: String? {
       switch self {
       case .invalidJSON:
-        return "The Realtime server sent invalid JSON."
+        "The Realtime server sent invalid JSON."
       case .missingField(let field, let eventType):
-        return "Realtime event \(eventType) is missing \(field)."
+        "Realtime event \(eventType) is missing \(field)."
       }
     }
   }
@@ -133,34 +133,34 @@ public enum RealtimeServerEvent: Equatable, Sendable {
     case "session.updated":
       return .sessionReady
     case "input_audio_buffer.committed":
-      return .inputCommitted(
-        itemID: try requiredString(
+      return try .inputCommitted(
+        itemID: requiredString(
           "item_id",
           in: dictionary,
           eventType: type
         )
       )
     case "conversation.item.input_audio_transcription.delta":
-      return .transcriptDelta(
-        itemID: try requiredString(
+      return try .transcriptDelta(
+        itemID: requiredString(
           "item_id",
           in: dictionary,
           eventType: type
         ),
-        delta: try requiredString(
+        delta: requiredString(
           "delta",
           in: dictionary,
           eventType: type
         )
       )
     case "conversation.item.input_audio_transcription.completed":
-      return .transcriptCompleted(
-        itemID: try requiredString(
+      return try .transcriptCompleted(
+        itemID: requiredString(
           "item_id",
           in: dictionary,
           eventType: type
         ),
-        transcript: try requiredString(
+        transcript: requiredString(
           "transcript",
           in: dictionary,
           eventType: type

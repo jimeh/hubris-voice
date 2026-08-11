@@ -401,21 +401,21 @@ actor RealtimeTranscriptionClient {
   }
 }
 
-extension RealtimeServerEvent {
-  fileprivate var diagnosticName: String {
+private extension RealtimeServerEvent {
+  var diagnosticName: String {
     switch self {
     case .sessionReady:
-      return "session.updated"
+      "session.updated"
     case .inputCommitted:
-      return "input_audio_buffer.committed"
+      "input_audio_buffer.committed"
     case .transcriptDelta:
-      return "transcript.delta"
+      "transcript.delta"
     case .transcriptCompleted:
-      return "transcript.completed"
+      "transcript.completed"
     case .error(let message):
-      return "server.error message=\(message)"
+      "server.error message=\(message)"
     case .ignored(let type):
-      return "ignored.\(type)"
+      "ignored.\(type)"
     }
   }
 }

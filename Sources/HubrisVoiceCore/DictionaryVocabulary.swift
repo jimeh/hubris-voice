@@ -8,9 +8,9 @@ public enum DictionaryVocabulary {
     public var errorDescription: String? {
       switch self {
       case .invalidCharacters(let entry):
-        return "Dictionary entry contains unsupported characters: \(entry)"
+        "Dictionary entry contains unsupported characters: \(entry)"
       case .entryTooLong(let entry):
-        return "Dictionary entry is longer than 80 characters: \(entry)"
+        "Dictionary entry is longer than 80 characters: \(entry)"
       }
     }
   }

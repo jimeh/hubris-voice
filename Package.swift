@@ -5,7 +5,7 @@ import PackageDescription
 let package = Package(
   name: "HubrisVoice",
   platforms: [
-    .macOS(.v15)
+    .macOS(.v15),
   ],
   products: [
     .library(name: "HubrisVoiceCore", targets: ["HubrisVoiceCore"]),

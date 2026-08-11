@@ -49,7 +49,7 @@ final class PushToTalkMonitor: @unchecked Sendable {
 
     let eventMask =
       (CGEventMask(1) << CGEventType.keyDown.rawValue)
-      | (CGEventMask(1) << CGEventType.keyUp.rawValue)
+        | (CGEventMask(1) << CGEventType.keyUp.rawValue)
     guard
       let eventTap = CGEvent.tapCreate(
         tap: .cgSessionEventTap,
@@ -144,8 +144,8 @@ final class PushToTalkMonitor: @unchecked Sendable {
   }
 }
 
-extension KeyModifiers {
-  fileprivate init(eventFlags: CGEventFlags) {
+private extension KeyModifiers {
+  init(eventFlags: CGEventFlags) {
     var modifiers: KeyModifiers = []
     if eventFlags.contains(.maskControl) {
       modifiers.insert(.control)

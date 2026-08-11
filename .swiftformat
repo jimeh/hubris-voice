@@ -1,0 +1,17 @@
+--min-version 0.62.0
+--swift-version 6.0
+--language-mode 6
+--indent 2
+--max-width 120
+--binary-grouping none
+--decimal-grouping 3,4
+--hex-grouping none
+--hex-literal-case lowercase
+--octal-grouping none
+--pattern-let inline
+--semicolons never
+--strip-unused-args closure-only
+--wrap-arguments before-first
+--wrap-collections before-first
+--wrap-parameters before-first
+--exclude .build

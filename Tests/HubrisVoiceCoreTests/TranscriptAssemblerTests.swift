@@ -1,6 +1,5 @@
-import XCTest
-
 @testable import HubrisVoiceCore
+import XCTest
 
 final class TranscriptAssemblerTests: XCTestCase {
   func testDeltaBuildsPreviewAndCompletedUsesAuthoritativeTranscript() {

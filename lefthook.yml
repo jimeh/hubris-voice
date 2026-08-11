@@ -1,0 +1,28 @@
+pre-commit:
+  parallel: true
+  jobs:
+    - name: swift
+      glob: "*.swift"
+      run: mise exec -- swiftformat {staged_files} && mise exec -- swiftlint lint --strict {staged_files}
+      stage_fixed: true
+
+    - name: zsh
+      glob: "*.sh"
+      run: zsh -n {staged_files}
+
+    - name: toml
+      glob: "*.toml"
+      run: mise exec -- taplo format {staged_files} && mise exec -- taplo lint {staged_files} && mise tasks validate
+      stage_fixed: true
+
+    - name: swiftlint-config
+      glob: ".swiftlint.yml"
+      run: mise exec -- swiftlint lint --strict --quiet
+
+    - name: lefthook-config
+      glob: "lefthook.yml"
+      run: mise exec -- lefthook validate
+
+    - name: bundle-metadata
+      glob: "*.plist"
+      run: plutil -lint {staged_files} && ./Tests/BundleMetadataTests.sh

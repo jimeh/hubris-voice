@@ -1,7 +1,6 @@
 import Foundation
-import XCTest
-
 @testable import HubrisVoiceCore
+import XCTest
 
 final class RealtimeProtocolTests: XCTestCase {
   func testEndpointDeclaresTranscriptionIntentWithoutSessionModel() throws {
@@ -16,7 +15,7 @@ final class RealtimeProtocolTests: XCTestCase {
     XCTAssertEqual(
       components.queryItems,
       [
-        URLQueryItem(name: "intent", value: "transcription")
+        URLQueryItem(name: "intent", value: "transcription"),
       ]
     )
   }

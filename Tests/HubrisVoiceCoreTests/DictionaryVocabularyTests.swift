@@ -1,6 +1,5 @@
-import XCTest
-
 @testable import HubrisVoiceCore
+import XCTest
 
 final class DictionaryVocabularyTests: XCTestCase {
   func testNormalizeTrimsDropsEmptyAndDeduplicatesCaseInsensitively() throws {

@@ -135,7 +135,7 @@ final class AudioCapture: @unchecked Sendable {
 
     let byteCount =
       Int(converted.frameLength)
-      * MemoryLayout<Int16>.size
+        * MemoryLayout<Int16>.size
     onChunk?(Data(bytes: samples, count: byteCount))
   }
 
@@ -148,7 +148,7 @@ final class AudioCapture: @unchecked Sendable {
     }
 
     var sum: Float = 0
-    for index in 0..<Int(buffer.frameLength) {
+    for index in 0 ..< Int(buffer.frameLength) {
       let sample = channel[index]
       sum += sample * sample
     }

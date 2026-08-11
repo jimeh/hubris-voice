@@ -1,5 +1,5 @@
-import AVFoundation
 import ApplicationServices
+import AVFoundation
 import Foundation
 
 enum MicrophonePermission: Equatable {
@@ -49,7 +49,7 @@ enum PermissionService {
 
   @discardableResult
   static func requestAccessibility() -> Bool {
-    return AXIsProcessTrustedWithOptions(
+    AXIsProcessTrustedWithOptions(
       ["AXTrustedCheckOptionPrompt": true] as CFDictionary
     )
   }

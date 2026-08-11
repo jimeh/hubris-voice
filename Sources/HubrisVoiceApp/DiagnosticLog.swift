@@ -41,7 +41,7 @@ actor DiagnosticLog {
 
     let line =
       "\(dateFormatter.string(from: Date())) "
-      + "[\(level.rawValue)] \(message)\n"
+        + "[\(level.rawValue)] \(message)\n"
     appendToFile(line)
   }
 

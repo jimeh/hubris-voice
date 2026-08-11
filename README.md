@@ -29,11 +29,13 @@ accepting a long-lived project key in the client.
 
 ## Build
 
-Requirements: macOS 15 or newer and Xcode 16 or newer.
+Requirements: macOS 15 or newer, Xcode 16 or newer, and
+[mise](https://mise.jdx.dev/).
 
 ```sh
-make test
-make bundle
+mise run setup
+mise run test
+mise run bundle
 ```
 
 The bundle is written to:
@@ -47,7 +49,7 @@ OpenAI.
 
 ### Development signing
 
-`make bundle` signs the app with an Apple Development identity so macOS can
+`mise run bundle` signs the app with an Apple Development identity so macOS can
 recognize rebuilt versions as the same app and preserve privacy and Keychain
 approvals.
 
@@ -87,12 +89,25 @@ OpenAI automatically on later launches when an API key is already stored.
 ## Development checks
 
 ```sh
-swift test
-swift build
-./Scripts/bundle.sh release
-plutil -p ".build/artifacts/Hubris Voice.app/Contents/Info.plist"
-codesign --verify --deep --strict ".build/artifacts/Hubris Voice.app"
+mise tasks
+mise run format
+mise run check
+mise run verify
 ```
+
+`check` runs formatting checks, SwiftLint, configuration and shell validation,
+compilation, and tests. `verify` additionally builds and strictly verifies the
+signed release app bundle. Use `mise run doctor` to diagnose local setup and
+`mise run logs` to follow the sanitized Realtime diagnostic log.
+
+Lefthook runs fast staged-file formatters and linters before each commit. The
+hook is installed by `mise run setup` and can be reinstalled with
+`mise run hooks:install`.
+
+The project toolchain is recorded in `mise.toml` and resolved versions and
+artifact checksums are committed in `mise.lock`. `mise run tools:update`
+updates tools that have cleared the seven-day release cooldown, refreshes the
+lockfile, and runs the normal project checks.
 
 See [PLAN.md](PLAN.md) for product decisions, architecture, visual direction,
 test strategy, and deferred questions.

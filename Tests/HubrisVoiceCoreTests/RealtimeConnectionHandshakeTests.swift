@@ -1,6 +1,5 @@
-import XCTest
-
 @testable import HubrisVoiceCore
+import XCTest
 
 final class RealtimeConnectionHandshakeTests: XCTestCase {
   func testWaitForOpenDoesNotCompleteUntilConnectionOpens() async throws {
@@ -63,7 +62,7 @@ final class RealtimeConnectionHandshakeTests: XCTestCase {
   func testFailureDescriptionsPreserveCloseAndTransportDetails() {
     XCTAssertEqual(
       RealtimeConnectionFailure.closed(
-        code: 1008,
+        code: 1_008,
         reason: "Policy violation"
       ).localizedDescription,
       "OpenAI closed the Realtime WebSocket before it opened "

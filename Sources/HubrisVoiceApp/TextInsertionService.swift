@@ -136,7 +136,7 @@ final class TextInsertionService {
         attribute as CFString,
         &value
       )
-        == .success,
+      == .success,
       let value,
       CFGetTypeID(value) == AXUIElementGetTypeID()
     else {
@@ -156,7 +156,7 @@ final class TextInsertionService {
         attribute as CFString,
         &value
       )
-        == .success
+      == .success
     else {
       return nil
     }
@@ -174,7 +174,7 @@ final class TextInsertionService {
         attribute as CFString,
         &value
       )
-        == .success,
+      == .success,
       let value,
       CFGetTypeID(value) == AXValueGetTypeID()
     else {

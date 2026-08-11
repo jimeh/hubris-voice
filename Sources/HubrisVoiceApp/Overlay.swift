@@ -364,26 +364,26 @@ extension Color {
   static let slate = Color(
     red: 0x24 / 255,
     green: 0x28 / 255,
-    blue: 0x2E / 255
+    blue: 0x2e / 255
   )
   static let fog = Color(
-    red: 0xE8 / 255,
-    green: 0xEC / 255,
-    blue: 0xEF / 255
+    red: 0xe8 / 255,
+    green: 0xec / 255,
+    blue: 0xef / 255
   )
   static let signalBlue = Color(
     red: 0x62 / 255,
-    green: 0xA8 / 255,
-    blue: 0xFF / 255
+    green: 0xa8 / 255,
+    blue: 0xff / 255
   )
   static let voiceCoral = Color(
-    red: 0xFF / 255,
+    red: 0xff / 255,
     green: 0x74 / 255,
     blue: 0x66 / 255
   )
   static let completionMint = Color(
-    red: 0x6D / 255,
-    green: 0xD6 / 255,
-    blue: 0xA0 / 255
+    red: 0x6d / 255,
+    green: 0xd6 / 255,
+    blue: 0xa0 / 255
   )
 }

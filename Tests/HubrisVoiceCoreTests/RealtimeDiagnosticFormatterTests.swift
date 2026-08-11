@@ -1,7 +1,6 @@
 import Foundation
-import XCTest
-
 @testable import HubrisVoiceCore
+import XCTest
 
 final class RealtimeDiagnosticFormatterTests: XCTestCase {
   func testErrorSummaryIncludesDomainCodeAndSingleLineMessage() {
@@ -9,7 +8,7 @@ final class RealtimeDiagnosticFormatterTests: XCTestCase {
       domain: NSURLErrorDomain,
       code: NSURLErrorNetworkConnectionLost,
       userInfo: [
-        NSLocalizedDescriptionKey: "Socket disconnected\nwhile sending"
+        NSLocalizedDescriptionKey: "Socket disconnected\nwhile sending",
       ]
     )
 
@@ -20,14 +19,14 @@ final class RealtimeDiagnosticFormatterTests: XCTestCase {
   }
 
   func testSanitizeRemovesControlCharactersAndBoundsLength() {
-    let value = "opened\u{0000}\twith\r\nprotocol " + String(repeating: "x", count: 5000)
+    let value = "opened\u{0000}\twith\r\nprotocol " + String(repeating: "x", count: 5_000)
     let sanitized = RealtimeDiagnosticFormatter.sanitize(value)
 
     XCTAssertFalse(sanitized.contains("\u{0000}"))
     XCTAssertFalse(sanitized.contains("\t"))
     XCTAssertFalse(sanitized.contains("\r"))
     XCTAssertFalse(sanitized.contains("\n"))
-    XCTAssertLessThanOrEqual(sanitized.count, 2000)
+    XCTAssertLessThanOrEqual(sanitized.count, 2_000)
     XCTAssertTrue(sanitized.hasPrefix("opened with protocol "))
   }
 

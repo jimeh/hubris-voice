@@ -1,0 +1,119 @@
+min_version = "2026.8.0"
+
+[settings]
+experimental = true
+lockfile = true
+minimum_release_age = "7d"
+
+[tools]
+lefthook = "latest"
+swiftformat = "latest"
+swiftlint = "latest"
+taplo = "latest"
+
+[tasks.setup]
+description = "Install pinned tools and repository Git hooks"
+run = ["mise install --locked", "lefthook install"]
+
+[tasks.doctor]
+description = "Check the macOS, Xcode, signing, tool, and hook setup"
+run = "./Scripts/doctor.sh"
+
+[tasks.dev]
+description = "Build, sign, and launch the development app"
+depends = ["bundle"]
+run = "open '.build/artifacts/Hubris Voice.app'"
+
+[tasks.build]
+description = "Build the debug executable"
+run = "swift build"
+
+[tasks.bundle]
+description = "Build and sign the release app bundle"
+run = "./Scripts/bundle.sh release"
+
+[tasks."bundle:verify"]
+description = "Build and strictly verify the signed release app bundle"
+run = [
+  "./Scripts/bundle.sh release",
+  "plutil -lint '.build/artifacts/Hubris Voice.app/Contents/Info.plist'",
+  "codesign --verify --deep --strict --verbose=2 '.build/artifacts/Hubris Voice.app'",
+]
+
+[tasks.format]
+description = "Format Swift and TOML files"
+run = ["swiftformat Package.swift Sources Tests", "taplo format mise.toml"]
+
+[tasks."format:check"]
+description = "Check Swift and TOML formatting without changing files"
+run = [
+  "swiftformat --lint Package.swift Sources Tests",
+  "taplo format --check mise.toml",
+]
+
+[tasks."lint:swift"]
+description = "Run strict SwiftLint checks"
+run = "swiftlint lint --strict"
+
+[tasks."lint:shell"]
+description = "Parse all repository zsh scripts"
+run = "zsh -n Scripts/*.sh Tests/*.sh"
+
+[tasks."lint:config"]
+description = "Validate task, hook, TOML, and bundle metadata configuration"
+run = [
+  "mise tasks validate",
+  "lefthook validate",
+  "taplo lint mise.toml",
+  "plutil -lint Support/Info.plist",
+]
+
+[tasks.lint]
+description = "Run all static checks"
+depends = ["lint:swift", "lint:shell", "lint:config"]
+
+[tasks."lint:fix"]
+description = "Apply safe SwiftLint corrections, then format"
+run = ["swiftlint lint --fix", "mise run format"]
+
+[tasks.typecheck]
+description = "Compile all production Swift targets"
+run = "swift build"
+
+[tasks.test]
+description = "Run bundle metadata, signing resolver, and Swift tests"
+depends = ["typecheck"]
+run = [
+  "./Tests/BundleMetadataTests.sh",
+  "./Tests/SigningIdentityResolverTests.sh",
+  "swift test",
+]
+
+[tasks.check]
+description = "Run formatting, linting, compilation, and tests"
+depends = ["format:check", "lint", "test"]
+
+[tasks.verify]
+description = "Run the full pre-handoff check including signed bundle verification"
+depends = ["check"]
+run = "mise run bundle:verify"
+
+[tasks."hooks:install"]
+description = "Install the managed Git hooks"
+run = "lefthook install"
+
+[tasks."hooks:run"]
+description = "Run the pre-commit hook against staged files"
+run = "lefthook run pre-commit"
+
+[tasks."tools:update"]
+description = "Update eligible managed tools and refresh the lockfile"
+run = ["mise up", "mise lock", "mise run check"]
+
+[tasks.logs]
+description = "Follow the sanitized Realtime diagnostic log"
+run = "tail -F \"${HOME}/Library/Logs/HubrisVoice/realtime.log\""
+
+[tasks.clean]
+description = "Remove Swift build outputs"
+run = "swift package clean"

@@ -22,7 +22,7 @@ public enum RealtimeDiagnosticFormatter {
     }.joined()
     let singleLine = withoutControls.split(whereSeparator: \.isWhitespace)
       .joined(separator: " ")
-    return String(singleLine.prefix(2000))
+    return String(singleLine.prefix(2_000))
   }
 
   private static func replacingMatches(

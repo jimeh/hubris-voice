@@ -43,7 +43,7 @@ enum AppPhase: Equatable {
     case .listening:
       .signalBlue
     case .connecting, .finalizing, .result(.attempted),
-      .result(.rejected):
+         .result(.rejected):
       .voiceCoral
     case .needsSetup, .error:
       .secondary
@@ -111,7 +111,7 @@ final class AppModel: ObservableObject {
     language = defaults.string(forKey: DefaultsKey.language) ?? "en"
     prompt =
       defaults.string(forKey: DefaultsKey.prompt)
-      ?? "Transcribe natural dictation. Preserve the spelling and capitalization of dictionary terms. Add punctuation suitable for prose."
+        ?? "Transcribe natural dictation. Preserve the spelling and capitalization of dictionary terms. Add punctuation suitable for prose."
     dictionaryWords =
       defaults.stringArray(
         forKey: DefaultsKey.dictionary
@@ -295,7 +295,7 @@ final class AppModel: ObservableObject {
       phase = .error(error.localizedDescription)
       settingsMessage =
         error.localizedDescription
-        + " Debug log: \(DiagnosticLog.displayPath)"
+          + " Debug log: \(DiagnosticLog.displayPath)"
     }
   }
 
@@ -316,7 +316,7 @@ final class AppModel: ObservableObject {
     overlayDismissalScheduler.cancel()
     guard
       !apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        .isEmpty
+      .isEmpty
     else {
       showError("Add an OpenAI API key before dictating.", inOverlay: true)
       return
@@ -437,11 +437,10 @@ final class AppModel: ObservableObject {
     }
 
     overlayModel.transcript = text
-    let outcome: PasteOutcome
-    if let capturedFocus {
-      outcome = await insertionService.paste(text, into: capturedFocus)
+    let outcome: PasteOutcome = if let capturedFocus {
+      await insertionService.paste(text, into: capturedFocus)
     } else {
-      outcome = .rejected
+      .rejected
     }
     phase = .result(outcome)
 
@@ -460,8 +459,8 @@ final class AppModel: ObservableObject {
       overlayModel.mode = .attention
       overlayModel.message =
         capturedFocus == nil
-        ? "No target app was captured · copy instead"
-        : "Focus or app changed · copy instead"
+          ? "No target app was captured · copy instead"
+          : "Focus or app changed · copy instead"
       overlayModel.canCopy = true
     }
   }
