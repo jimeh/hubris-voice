@@ -260,27 +260,58 @@ struct ShortcutsSettingsTab: View {
     Form {
       Section("Push to talk") {
         SettingsRow(title: "Shortcut", caption: "Hold to record. Release to finish and insert.") {
-          Text("⌃⇧Space")
-            .font(.system(.body, design: .monospaced, weight: .semibold))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(Color.slate.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+          ShortcutRecorder(
+            model: model,
+            binding: model.shortcuts.pushToTalk,
+            role: .pushToTalk,
+            allowsClear: false
+          )
+        }
+        SettingsRow(
+          title: "Tap to lock",
+          caption: "A quick tap starts a locked recording. Tap again to finish."
+        ) {
+          Toggle("Tap to lock", isOn: $model.tapToLock).labelsHidden()
         }
         SettingsRow(title: "Cancel", caption: "Discards the current dictation.") {
-          Text("Esc")
-            .font(.system(.body, design: .monospaced, weight: .semibold))
+          KeyCap(text: "Esc")
         }
       }
-      Section {
-        Text(
-          "A configurable shortcut, tap to lock, and a paste-last-transcript shortcut arrive with the next milestone."
-        )
-        .font(.caption)
-        .foregroundStyle(.secondary)
+      Section("Recovery") {
+        SettingsRow(
+          title: "Paste last transcript",
+          caption: "Inserts the most recent transcript into the focused field. "
+            + "Copies to the clipboard if insertion fails."
+        ) {
+          ShortcutRecorder(
+            model: model,
+            binding: model.shortcuts.pasteLastTranscript,
+            role: .pasteLastTranscript,
+            allowsClear: true
+          )
+        }
+      }
+      if let conflict = model.shortcutConflict {
+        Section {
+          StatusBadge(text: conflict, tone: .attention)
+        }
+      }
+      if model.shortcuts.pushToTalk == .modifier(.fn)
+        || model.shortcuts.pasteLastTranscript == .modifier(.fn)
+      {
+        Section {
+          Text(fnWarning)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
       }
     }
     .formStyle(.grouped)
   }
+
+  private let fnWarning =
+    "Fn is bound. On some keyboards macOS handles Fn before the shortcut can see it. "
+      + "If holding Fn does nothing, choose a different key."
 }
 
 private struct PermissionItem {

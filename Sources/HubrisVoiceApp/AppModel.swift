@@ -619,10 +619,15 @@ final class AppModel: ObservableObject {
     apply(.pressed)
   }
 
+  /// Set while the Settings window is capturing a new binding so that the
+  /// keys being recorded do not also trigger dictation.
+  var isRecordingShortcut = false
+
   private func handleShortcut(
     role: ShortcutRole,
     action: ShortcutGesture.Action
   ) {
+    guard !isRecordingShortcut else { return }
     switch (role, action) {
     case (.pushToTalk, .pressed):
       handlePress()
