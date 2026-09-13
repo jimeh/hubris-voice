@@ -1,6 +1,9 @@
 # Daily driver plan
 
-Status: draft, 2026-09-13, revised after an independent review. Builds on
+Status: implemented on 2026-09-13 across six milestones; each has its own brief
+in this directory. Manual verification with the user present is still open for
+the items listed under each milestone. Originally drafted 2026-09-13 and revised
+after an independent review. Builds on
 [PLAN.md](../../PLAN.md), which stays the product and architecture reference.
 This document covers the work needed to move Hubris Voice from a working proof
 of concept to a dictation app used many times a day.
