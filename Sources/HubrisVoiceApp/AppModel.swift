@@ -619,6 +619,13 @@ final class AppModel: ObservableObject {
       }
       updateHistory(id: entryID, outcome: outcome.historyOutcome)
       presentedHistoryEntryID = outcome == .rejected ? entryID : nil
+    case .commitRejected(let generation, _):
+      guard let snippet = session.pending.first(where: { $0.generation == generation }) else { return nil }
+      presentedHistoryEntryID = recordTranscript(
+        generation: generation,
+        text: snippet.transcript,
+        outcome: .rejected
+      )
     case .finalizingTimedOut(let generation):
       guard
         let snippet = session.pending.first(where: { $0.generation == generation }),

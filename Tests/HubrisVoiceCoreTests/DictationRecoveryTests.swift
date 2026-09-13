@@ -66,6 +66,17 @@ final class DictationRecoveryTests: XCTestCase {
     }
   }
 
+  func testRejectedCommitRetainsItsPartialForRecovery() {
+    var session = readySession()
+    _ = session.transition(.pressed)
+    _ = session.transition(.server(.transcriptDelta(itemID: "partial", delta: "Recover this partial")))
+    _ = session.transition(.released(heldDuration: 1))
+    _ = session.transition(.commitRejected(generation: 0, message: "Rejected"))
+    XCTAssertEqual(session.presentation?.transcript, "Recover this partial")
+    XCTAssertEqual(session.presentation?.message, "Rejected")
+    XCTAssertTrue(session.pending.isEmpty)
+  }
+
   private func readySession() -> DictationSession {
     var session = DictationSession(hasKey: true)
     _ = session.transition(.connectRequested(force: false))
