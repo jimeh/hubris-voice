@@ -86,6 +86,24 @@ final class InteractionPolicyTests: XCTestCase {
     )
   }
 
+  func testPushToTalkGestureCancelWhileHeldReturnsCancelled() {
+    var gesture = PushToTalkGesture(shortcut: .pushToTalkDefault)
+    _ = gesture.handle(
+      isKeyDown: true,
+      keyCode: 49,
+      modifiers: [.control, .shift],
+      isRepeat: false
+    )
+
+    XCTAssertEqual(gesture.cancel(), .cancelled)
+  }
+
+  func testPushToTalkGestureCancelWhenNotHeldIsIgnored() {
+    var gesture = PushToTalkGesture(shortcut: .pushToTalkDefault)
+
+    XCTAssertEqual(gesture.cancel(), .ignored)
+  }
+
   func testSnippetPolicyRejectsAccidentalTapAtBoundary() {
     let policy = SnippetPolicy(minimumDuration: 0.2)
 

@@ -8,6 +8,11 @@ struct CapturedFocus {
   let element: AXUIElement?
 }
 
+struct PasteResult {
+  let outcome: PasteOutcome
+  let reason: DictationSession.RejectionReason?
+}
+
 @MainActor
 final class TextInsertionService {
   func captureFocusedTarget() -> CapturedFocus? {
@@ -47,13 +52,17 @@ final class TextInsertionService {
     )
   }
 
+  // swiftlint:disable:next function_body_length
   func paste(_ text: String, into target: CapturedFocus) async
-    -> PasteOutcome
+    -> PasteResult
   {
     guard
       let current = captureFocusedTarget()
     else {
-      return .rejected
+      return PasteResult(
+        outcome: .rejected,
+        reason: target.snapshot.isSecure ? .secureField : .focusChanged
+      )
     }
 
     let decision = PasteSafety.decision(
@@ -61,7 +70,11 @@ final class TextInsertionService {
       current: current.snapshot
     )
     guard decision != .rejected else {
-      return .rejected
+      let reason: DictationSession.RejectionReason =
+        target.snapshot.isSecure || current.snapshot.isSecure
+          ? .secureField
+          : .focusChanged
+      return PasteResult(outcome: .rejected, reason: reason)
     }
     if decision == .exactElement {
       guard
@@ -69,7 +82,7 @@ final class TextInsertionService {
         let currentElement = current.element,
         CFEqual(targetElement, currentElement)
       else {
-        return .rejected
+        return PasteResult(outcome: .rejected, reason: .focusChanged)
       }
     }
 
@@ -79,7 +92,7 @@ final class TextInsertionService {
     pasteboard.clearContents()
     guard pasteboard.setString(text, forType: .string) else {
       previousContents.restore(to: pasteboard)
-      return .rejected
+      return PasteResult(outcome: .rejected, reason: .focusChanged)
     }
     let dictatedChangeCount = pasteboard.changeCount
 
@@ -97,7 +110,7 @@ final class TextInsertionService {
       )
     else {
       previousContents.restore(to: pasteboard)
-      return .rejected
+      return PasteResult(outcome: .rejected, reason: .focusChanged)
     }
     keyDown.flags = .maskCommand
     keyUp.flags = .maskCommand
@@ -113,9 +126,12 @@ final class TextInsertionService {
 
     try? await Task.sleep(for: .milliseconds(200))
     let afterState = current.element.flatMap(accessibleTextState)
-    return PasteConfirmation.outcome(
-      before: beforeState,
-      after: afterState
+    return PasteResult(
+      outcome: PasteConfirmation.outcome(
+        before: beforeState,
+        after: afterState
+      ),
+      reason: nil
     )
   }
 

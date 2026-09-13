@@ -45,6 +45,8 @@ final class OverlayViewModel: ObservableObject {
   @Published var elapsed: TimeInterval = 0
   @Published var levels: [Float] = Array(repeating: 0.08, count: 22)
   @Published var canCopy = false
+  @Published var canDismiss = false
+  @Published var pendingCount = 0
 
   var transcriptViewportHeight: CGFloat {
     OverlayLayout.transcriptViewportHeight(for: transcript)
@@ -57,6 +59,23 @@ final class OverlayViewModel: ObservableObject {
     elapsed = 0
     levels = Array(repeating: 0.08, count: 22)
     canCopy = false
+    canDismiss = false
+    pendingCount = 0
+  }
+
+  func apply(_ presentation: OverlayPresentation) {
+    mode = switch presentation.mode {
+    case .listening: .listening
+    case .finalizing: .finalizing
+    case .completed: .completed
+    case .copied: .copied
+    case .attention: .attention
+    }
+    transcript = presentation.transcript
+    message = presentation.message
+    canCopy = presentation.canCopy
+    canDismiss = presentation.canDismiss
+    pendingCount = presentation.pendingCount
   }
 
   func record(level: Float) {
@@ -129,6 +148,9 @@ final class OverlayController {
 
   func show() {
     resizeForTranscript(model.transcript)
+    guard !panel.isVisible else {
+      return
+    }
     positionOnActiveScreen()
     panel.orderFrontRegardless()
   }
@@ -194,6 +216,11 @@ private struct OverlayView: View {
         Text(timeLabel)
           .font(.system(size: 11, weight: .medium, design: .monospaced))
           .foregroundStyle(Color.fog.opacity(0.58))
+        if model.pendingCount > 0 {
+          Text("+\(model.pendingCount)")
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .foregroundStyle(Color.fog.opacity(0.58))
+        }
       }
 
       ScrollViewReader { proxy in
@@ -242,6 +269,8 @@ private struct OverlayView: View {
           Button("Copy", action: onCopy)
             .buttonStyle(.borderedProminent)
             .tint(model.mode.color)
+        }
+        if model.canDismiss {
           Button("Dismiss", action: onDismiss)
             .buttonStyle(.plain)
             .foregroundStyle(Color.fog.opacity(0.7))

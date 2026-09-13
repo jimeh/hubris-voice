@@ -30,10 +30,26 @@ final class PushToTalkMonitor: @unchecked Sendable {
 
   var onPress: (@Sendable () -> Void)?
   var onRelease: (@Sendable () -> Void)?
+  var onCancel: (@Sendable () -> Void)?
+  var onEscape: (@Sendable () -> Void)?
+
+  var capturesEscape: Bool {
+    get {
+      lock.lock()
+      defer { lock.unlock() }
+      return isCapturingEscape
+    }
+    set {
+      lock.lock()
+      isCapturingEscape = newValue
+      lock.unlock()
+    }
+  }
 
   private let shortcut: GlobalShortcut
   private let lock = NSLock()
   private var gesture: PushToTalkGesture
+  private var isCapturingEscape = false
   private var eventTap: CFMachPort?
   private var runLoopSource: CFRunLoopSource?
 
@@ -107,6 +123,10 @@ final class PushToTalkMonitor: @unchecked Sendable {
     let keyCode = UInt16(
       event.getIntegerValueField(.keyboardEventKeycode)
     )
+    if type == .keyDown, keyCode == 53, capturesEscape {
+      onEscape?()
+      return true
+    }
     let modifiers = KeyModifiers(eventFlags: event.flags)
     let isRepeat =
       event.getIntegerValueField(
@@ -130,6 +150,8 @@ final class PushToTalkMonitor: @unchecked Sendable {
       onPress?()
     case .released:
       onRelease?()
+    case .cancelled:
+      onCancel?()
     case .ignored, .consumed:
       break
     }

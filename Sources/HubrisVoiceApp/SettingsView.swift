@@ -27,21 +27,21 @@ struct SettingsView: View {
     HStack(spacing: 12) {
       ZStack {
         Circle()
-          .fill(model.phase.statusColor.opacity(0.14))
+          .fill(model.statusColor.opacity(0.14))
           .frame(width: 42, height: 42)
         Image(systemName: model.menuSystemImage)
           .font(.system(size: 19, weight: .semibold))
-          .foregroundStyle(model.phase.statusColor)
+          .foregroundStyle(model.statusColor)
       }
       VStack(alignment: .leading, spacing: 2) {
         Text("Hubris Voice")
           .font(.system(size: 21, weight: .bold, design: .rounded))
-        Text(model.phase.title)
+        Text(model.phaseTitle)
           .foregroundStyle(.secondary)
       }
       Spacer()
       Circle()
-        .fill(model.phase.statusColor)
+        .fill(model.statusColor)
         .frame(width: 9, height: 9)
     }
   }
@@ -251,7 +251,7 @@ struct MenuBarContent: View {
   @ObservedObject var model: AppModel
 
   var body: some View {
-    Text(model.phase.title)
+    Text(model.phaseTitle)
     Divider()
     SettingsLink {
       Label("Settings…", systemImage: "gearshape")

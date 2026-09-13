@@ -46,6 +46,7 @@ public struct PushToTalkGesture: Sendable {
     case consumed
     case pressed
     case released
+    case cancelled
   }
 
   private let shortcut: GlobalShortcut
@@ -84,7 +85,7 @@ public struct PushToTalkGesture: Sendable {
       return .ignored
     }
     isHeld = false
-    return .released
+    return .cancelled
   }
 }
 
