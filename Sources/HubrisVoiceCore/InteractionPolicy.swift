@@ -278,24 +278,15 @@ public struct SnippetPolicy: Equatable, Sendable {
 
 public struct FocusSnapshot: Equatable, Sendable {
   public let processID: Int32
-  public let elementToken: String?
   public let isSecure: Bool
 
   public init(
     processID: Int32,
-    elementToken: String?,
     isSecure: Bool
   ) {
     self.processID = processID
-    self.elementToken = elementToken
     self.isSecure = isSecure
   }
-}
-
-public enum PasteDecision: Equatable, Sendable {
-  case exactElement
-  case sameApplication
-  case rejected
 }
 
 public enum PasteOutcome: Equatable, Sendable {
@@ -305,32 +296,8 @@ public enum PasteOutcome: Equatable, Sendable {
 }
 
 public enum PasteSafety {
-  public static func decision(
-    captured: FocusSnapshot,
-    current: FocusSnapshot
-  ) -> PasteDecision {
-    guard
-      !captured.isSecure,
-      !current.isSecure,
-      captured.processID == current.processID
-    else {
-      return .rejected
-    }
-
-    guard let capturedElementToken = captured.elementToken else {
-      return .sameApplication
-    }
-    guard current.elementToken == capturedElementToken else {
-      return .rejected
-    }
-    return .exactElement
-  }
-
-  public static func canPaste(
-    captured: FocusSnapshot,
-    current: FocusSnapshot
-  ) -> Bool {
-    decision(captured: captured, current: current) != .rejected
+  public static func canPaste(current: FocusSnapshot) -> Bool {
+    !current.isSecure
   }
 }
 

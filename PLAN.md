@@ -24,8 +24,9 @@ application.
 - A contextual transcription prompt.
 - Keychain-backed bring-your-own API key.
 - Explicit microphone and Accessibility permission controls.
-- Focus-safe final paste. If focus changes during dictation, retain the result
-  in the overlay with a Copy button instead of pasting into the wrong place.
+- Insertion at the caret when the transcript arrives. Only a secure field or
+  missing text focus prevents an attempt; recovery is a paste-last shortcut and
+  an explicit Copy in the menu bar, never an automatic clipboard write.
 - One language for the proof of concept, defaulting to English.
 
 Not in scope: accounts, billing, a backend token broker, automatic text
@@ -132,9 +133,10 @@ ink. No decorative gradients, chat bubbles, or dashboard cards.
   compilation, metadata checks, signing-resolver tests, and Swift tests;
   `mise run verify` adds release bundle assembly and strict code-sign checks.
 - Manual verification with the user present: microphone and Accessibility
-  permission flows, shortcut hold/release, live overlay, OpenAI connection,
-  focus-change and secure-field protection, confirmed paste into native apps,
-  attempted paste into Electron apps, and duplicate-launch protection.
+  permission flows, shortcut hold/release, the live pill at each line cap,
+  OpenAI connection, insertion after a focus change, secure-field rejection,
+  confirmed paste into native apps, attempted paste into Electron apps, the
+  paste-last recovery, and duplicate-launch protection.
 
 ## Deferred questions
 

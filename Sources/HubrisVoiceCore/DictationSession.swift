@@ -7,17 +7,15 @@ public struct OverlayPresentation: Equatable, Sendable {
   public enum Mode: Equatable, Sendable {
     case listening
     case finalizing
-    case completed
-    case copied
     case attention
   }
 
   public let mode: Mode
   public let transcript: String
+  /// Empty while everything is normal. Non-empty only for connection status
+  /// while listening and for the reason in attention. Never a key hint; the
+  /// app appends the recovery hint because it owns the shortcut settings.
   public let message: String
-  public let canCopy: Bool
-  public let canPasteHere: Bool
-  public let canDismiss: Bool
   public let pendingCount: Int
   public let isLocked: Bool
 
@@ -25,18 +23,12 @@ public struct OverlayPresentation: Equatable, Sendable {
     mode: Mode,
     transcript: String,
     message: String,
-    canCopy: Bool,
-    canPasteHere: Bool,
-    canDismiss: Bool,
     pendingCount: Int,
     isLocked: Bool = false
   ) {
     self.mode = mode
     self.transcript = transcript
     self.message = message
-    self.canCopy = canCopy
-    self.canPasteHere = canPasteHere
-    self.canDismiss = canDismiss
     self.pendingCount = pendingCount
     self.isLocked = isLocked
   }
@@ -63,8 +55,6 @@ public struct DictationSession: Equatable, Sendable {
   }
 
   public enum PresentedResult: Equatable, Sendable {
-    case confirmed(text: String)
-    case attempted(text: String)
     case rejected(text: String, reason: RejectionReason)
     case timedOut(text: String)
     case error(message: String, text: String)
@@ -72,7 +62,6 @@ public struct DictationSession: Equatable, Sendable {
 
   public enum RejectionReason: Equatable, Sendable {
     case noTarget
-    case focusChanged
     case secureField
   }
 
@@ -81,8 +70,6 @@ public struct DictationSession: Equatable, Sendable {
     case released(heldDuration: TimeInterval)
     case cancelRequested
     case dismissRequested
-    case copied
-    case pasteHereRequested
     case pasteLastRequested(text: String)
     case connectRequested(force: Bool)
     case credentialsChanged(hasKey: Bool)
@@ -125,7 +112,6 @@ public struct DictationSession: Equatable, Sendable {
   public struct Configuration: Equatable, Sendable {
     public var minimumHoldDuration: TimeInterval
     public var finalizingTimeout: Duration
-    public var copiedLinger: Duration
     public var attentionLinger: Duration
     public var maximumPendingSnippets: Int
     public var reconnect: ReconnectPolicy
@@ -134,7 +120,6 @@ public struct DictationSession: Equatable, Sendable {
     public init(
       minimumHoldDuration: TimeInterval = 0.2,
       finalizingTimeout: Duration = .seconds(8),
-      copiedLinger: Duration = .milliseconds(850),
       attentionLinger: Duration = .seconds(4),
       maximumPendingSnippets: Int = 4,
       reconnect: ReconnectPolicy = .init(),
@@ -142,7 +127,6 @@ public struct DictationSession: Equatable, Sendable {
     ) {
       self.minimumHoldDuration = minimumHoldDuration
       self.finalizingTimeout = finalizingTimeout
-      self.copiedLinger = copiedLinger
       self.attentionLinger = attentionLinger
       self.maximumPendingSnippets = maximumPendingSnippets
       self.reconnect = reconnect
@@ -159,8 +143,6 @@ public struct DictationSession: Equatable, Sendable {
   public private(set) var isLocked = false
 
   private var configuration: Configuration
-  private var wasCopied = false
-
   public init(configuration: Configuration = .init(), hasKey: Bool) {
     self.configuration = configuration
     connection = hasKey ? .disconnected(attempt: 0) : .unconfigured
@@ -198,10 +180,6 @@ public struct DictationSession: Equatable, Sendable {
       return cancelRequested()
     case .dismissRequested:
       return dismissRequested()
-    case .copied:
-      return copied()
-    case .pasteHereRequested:
-      return pasteHereRequested()
     case .pasteLastRequested(let text):
       return pasteLastRequested(text: text)
     case .localError(let message):
@@ -215,7 +193,6 @@ public struct DictationSession: Equatable, Sendable {
         return []
       }
       presented = nil
-      wasCopied = false
       return []
     case .insertionFinished(let generation, let outcome, let reason):
       return insertionFinished(generation: generation, outcome: outcome, reason: reason)
@@ -224,23 +201,16 @@ public struct DictationSession: Equatable, Sendable {
 
   public var presentation: OverlayPresentation? {
     if let listening {
-      let message = if isLocked {
-        "Locked · tap to finish"
-      } else {
-        switch connection {
-        case .ready: "Release to insert"
-        case .connecting: "Connecting…"
-        case .disconnected: "Reconnecting…"
-        case .unconfigured: "Add an OpenAI API key before dictating."
-        }
+      let message = switch connection {
+      case .ready: ""
+      case .connecting: "Connecting…"
+      case .disconnected: "Reconnecting…"
+      case .unconfigured: "Add an OpenAI API key before dictating."
       }
       return OverlayPresentation(
         mode: .listening,
         transcript: listening.transcript,
         message: message,
-        canCopy: false,
-        canPasteHere: false,
-        canDismiss: false,
         pendingCount: pending.count,
         isLocked: isLocked
       )
@@ -248,12 +218,9 @@ public struct DictationSession: Equatable, Sendable {
     if let presented {
       let values = presentationValues(for: presented)
       return OverlayPresentation(
-        mode: wasCopied ? .copied : values.mode,
+        mode: values.mode,
         transcript: values.text,
-        message: wasCopied ? "Copied to the clipboard" : values.message,
-        canCopy: !values.text.isEmpty && !wasCopied,
-        canPasteHere: !wasCopied && values.mode == .attention && !values.text.isEmpty,
-        canDismiss: true,
+        message: values.message,
         pendingCount: pending.count
       )
     }
@@ -263,10 +230,7 @@ public struct DictationSession: Equatable, Sendable {
       return OverlayPresentation(
         mode: .finalizing,
         transcript: transcript,
-        message: "Completing the transcript…",
-        canCopy: false,
-        canPasteHere: false,
-        canDismiss: false,
+        message: "",
         pendingCount: pendingCount
       )
     }
@@ -279,8 +243,6 @@ public struct DictationSession: Equatable, Sendable {
     }
     if let presented {
       switch presented {
-      case .confirmed: break
-      case .attempted: return "Paste attempted"
       case .rejected, .timedOut: return "Transcript ready"
       case .error: return "Needs attention"
       }
@@ -388,7 +350,6 @@ private extension DictationSession {
     nextGeneration += 1
     listening = Snippet(generation: generation)
     presented = nil
-    wasCopied = false
     var effects: [Effect] = [.cancelDismiss]
     if case .disconnected = connection {
       connection = .connecting(attempt: 0)
@@ -461,33 +422,7 @@ private extension DictationSession {
   mutating func dismissRequested() -> [Effect] {
     guard presented != nil else { return [] }
     presented = nil
-    wasCopied = false
     return [.cancelDismiss]
-  }
-
-  mutating func copied() -> [Effect] {
-    guard let presented, !presented.text.isEmpty else { return [] }
-    wasCopied = true
-    return [
-      .cancelDismiss,
-      .scheduleDismiss(after: configuration.copiedLinger),
-    ]
-  }
-
-  mutating func pasteHereRequested() -> [Effect] {
-    guard let presented else { return [] }
-    let text: String
-    switch presented {
-    case .attempted(let attemptedText),
-         .rejected(let attemptedText, _),
-         .timedOut(let attemptedText):
-      text = attemptedText
-    case .confirmed, .error:
-      return []
-    }
-    guard !text.isEmpty else { return [] }
-
-    return beginCurrentFocusInsertion(text: text)
   }
 
   mutating func pasteLastRequested(text: String) -> [Effect] {
@@ -503,15 +438,12 @@ private extension DictationSession {
     self.listening = nil
     isLocked = false
     setPresented(.error(message: message, text: listening.transcript))
-    var effects: [Effect] = [
+    return [
       .stopCapture,
       .clearAudio(generation: listening.generation),
       .discardSnippet(generation: listening.generation),
+      .scheduleDismiss(after: configuration.attentionLinger),
     ]
-    if listening.transcript.isEmpty {
-      effects.append(.scheduleDismiss(after: configuration.attentionLinger))
-    }
-    return effects
   }
 
   mutating func handle(_ event: RealtimeServerEvent) -> [Effect] {
@@ -579,9 +511,7 @@ private extension DictationSession {
         .discardSnippet(generation: listening.generation),
       ]
     }
-    if text.isEmpty {
-      effects.append(.scheduleDismiss(after: configuration.attentionLinger))
-    }
+    effects.append(.scheduleDismiss(after: configuration.attentionLinger))
     return effects
   }
 
@@ -589,14 +519,11 @@ private extension DictationSession {
     guard let index = pending.firstIndex(where: { $0.generation == generation }) else { return [] }
     let snippet = pending.remove(at: index)
     setPresented(.timedOut(text: snippet.transcript))
-    var effects: [Effect] = [
+    return [
       .clearAudio(generation: generation),
       .discardSnippet(generation: generation),
+      .scheduleDismiss(after: configuration.attentionLinger),
     ]
-    if snippet.transcript.isEmpty {
-      effects.append(.scheduleDismiss(after: configuration.attentionLinger))
-    }
-    return effects
   }
 
   mutating func insertionFinished(
@@ -606,27 +533,22 @@ private extension DictationSession {
   ) -> [Effect] {
     guard let index = inserting.firstIndex(where: { $0.generation == generation }) else { return [] }
     let snippet = inserting.remove(at: index)
-    let result: PresentedResult
-    let dismissalEffects: [Effect]
     switch outcome {
-    case .confirmed:
+    case .confirmed, .attempted:
       presented = nil
-      wasCopied = false
       return [.discardSnippet(generation: generation), .cancelDismiss]
-    case .attempted:
-      result = .attempted(text: snippet.transcript)
-      dismissalEffects = [.cancelDismiss, .scheduleDismiss(after: configuration.attentionLinger)]
     case .rejected:
-      result = .rejected(text: snippet.transcript, reason: reason ?? .focusChanged)
-      dismissalEffects = [.cancelDismiss]
+      setPresented(.rejected(text: snippet.transcript, reason: reason ?? .noTarget))
+      return [
+        .discardSnippet(generation: generation),
+        .cancelDismiss,
+        .scheduleDismiss(after: configuration.attentionLinger),
+      ]
     }
-    setPresented(result)
-    return [.discardSnippet(generation: generation)] + dismissalEffects
   }
 
   mutating func setPresented(_ result: PresentedResult) {
     presented = result
-    wasCopied = false
   }
 
   mutating func beginCurrentFocusInsertion(text: String) -> [Effect] {
@@ -634,7 +556,6 @@ private extension DictationSession {
     nextGeneration += 1
     inserting.append(Snippet(generation: generation, transcript: text))
     presented = nil
-    wasCopied = false
     return [
       .cancelDismiss,
       .insertAtCurrentFocus(generation: generation, text: text),
@@ -654,19 +575,14 @@ private extension DictationSession {
 
   func presentationValues(for result: PresentedResult) -> PresentationValues {
     switch result {
-    case .confirmed(let text):
-      return PresentationValues(mode: .completed, text: text, message: "Inserted into the focused field")
-    case .attempted(let text):
-      return PresentationValues(mode: .attention, text: text, message: "Paste attempted · copy if needed")
     case .rejected(let text, let reason):
       let message = switch reason {
-      case .noTarget: "No target app was captured · copy instead"
-      case .focusChanged: "Focus or app changed · copy instead"
-      case .secureField: "Secure field · copy instead"
+      case .noTarget: "No text field is focused"
+      case .secureField: "Secure field"
       }
       return PresentationValues(mode: .attention, text: text, message: message)
     case .timedOut(let text):
-      return PresentationValues(mode: .attention, text: text, message: "No result arrived · copy what was heard")
+      return PresentationValues(mode: .attention, text: text, message: "No transcript arrived")
     case .error(let message, let text):
       return PresentationValues(mode: .attention, text: text, message: message)
     }
@@ -683,15 +599,5 @@ private extension String {
   var trimmingWhitespace: String {
     let withoutLeading = drop(while: \.isWhitespace)
     return String(withoutLeading.reversed().drop(while: \.isWhitespace).reversed())
-  }
-}
-
-private extension DictationSession.PresentedResult {
-  var text: String {
-    switch self {
-    case .confirmed(let text), .attempted(let text), .timedOut(let text): text
-    case .rejected(let text, _): text
-    case .error(_, let text): text
-    }
   }
 }

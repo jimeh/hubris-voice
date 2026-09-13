@@ -6,8 +6,6 @@ import SwiftUI
 enum OverlayMode: Equatable {
   case listening
   case finalizing
-  case completed
-  case copied
   case attention
 
   var title: String {
@@ -16,10 +14,6 @@ enum OverlayMode: Equatable {
       "Listening"
     case .finalizing:
       "Finalizing"
-    case .completed:
-      "Pasted"
-    case .copied:
-      "Copied"
     case .attention:
       "Transcript ready"
     }
@@ -31,8 +25,6 @@ enum OverlayMode: Equatable {
       .signalBlue
     case .finalizing, .attention:
       .voiceCoral
-    case .completed, .copied:
-      .completionMint
     }
   }
 }
@@ -44,9 +36,6 @@ final class OverlayViewModel: ObservableObject {
   @Published var message = "Hold ⌃⇧Space · release to paste"
   @Published var elapsed: TimeInterval = 0
   @Published var levels: [Float] = Array(repeating: 0.08, count: 22)
-  @Published var canCopy = false
-  @Published var canPasteHere = false
-  @Published var canDismiss = false
   @Published var pendingCount = 0
   @Published var isLocked = false
 
@@ -60,9 +49,6 @@ final class OverlayViewModel: ObservableObject {
     message = "Hold ⌃⇧Space · release to paste"
     elapsed = 0
     levels = Array(repeating: 0.08, count: 22)
-    canCopy = false
-    canPasteHere = false
-    canDismiss = false
     pendingCount = 0
     isLocked = false
   }
@@ -71,15 +57,10 @@ final class OverlayViewModel: ObservableObject {
     mode = switch presentation.mode {
     case .listening: .listening
     case .finalizing: .finalizing
-    case .completed: .completed
-    case .copied: .copied
     case .attention: .attention
     }
     transcript = presentation.transcript
     message = presentation.message
-    canCopy = presentation.canCopy
-    canPasteHere = presentation.canPasteHere
-    canDismiss = presentation.canDismiss
     pendingCount = presentation.pendingCount
     isLocked = presentation.isLocked
   }
@@ -108,20 +89,10 @@ final class OverlayController {
     hostingView.sizingOptions
   }
 
-  init(
-    model: OverlayViewModel,
-    onPasteHere: @escaping () -> Void,
-    onCopy: @escaping () -> Void,
-    onDismiss: @escaping () -> Void
-  ) {
+  init(model: OverlayViewModel) {
     self.model = model
     hostingView = NSHostingView(
-      rootView: OverlayView(
-        model: model,
-        onPasteHere: onPasteHere,
-        onCopy: onCopy,
-        onDismiss: onDismiss
-      )
+      rootView: OverlayView(model: model)
     )
     hostingView.sizingOptions = []
     panel = NSPanel(
@@ -240,9 +211,6 @@ private extension NSPoint {
 
 private struct OverlayView: View {
   @ObservedObject var model: OverlayViewModel
-  let onPasteHere: () -> Void
-  let onCopy: () -> Void
-  let onDismiss: () -> Void
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -313,21 +281,6 @@ private struct OverlayView: View {
           .font(.system(size: 11, weight: .regular))
           .foregroundStyle(Color.fog.opacity(0.58))
         Spacer()
-        if model.canPasteHere {
-          Button("Paste here", action: onPasteHere)
-            .buttonStyle(.borderedProminent)
-            .tint(model.mode.color)
-        }
-        if model.canCopy {
-          Button("Copy", action: onCopy)
-            .buttonStyle(.borderedProminent)
-            .tint(model.mode.color)
-        }
-        if model.canDismiss {
-          Button("Dismiss", action: onDismiss)
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.fog.opacity(0.7))
-        }
       }
     }
     .padding(.horizontal, 20)

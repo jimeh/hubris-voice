@@ -3,19 +3,22 @@
 Hubris Voice is a native macOS proof of concept for push-to-talk dictation with
 OpenAI's `gpt-live-transcribe` model.
 
-Hold `Control-Shift-Space` to record. A non-activating overlay shows the live
-transcript next to the field you are dictating into. Release the shortcut to
-commit the audio; the finalized transcript is inserted into the text field
-that was focused when recording began, directly through Accessibility when the
-field supports it and through a guarded clipboard paste otherwise. If focus
-changes or the insertion cannot be confirmed, the overlay keeps the transcript
-and offers Paste here, Copy, and Dismiss, all reachable from the keyboard.
+Hold `Control-Shift-Space` to record. A small non-activating pill next to the
+field you are dictating into shows the live transcript and a mic-level
+indicator; it wraps to a configurable number of lines, three by default, and a
+cap of one scrolls sideways instead. Release the shortcut to commit the audio;
+the finalized transcript is inserted wherever the caret is at that moment,
+directly through Accessibility when the field supports it and through a
+clipboard paste otherwise. The pill hides as soon as the text is in. If there
+is no text field to insert into, the pill shows why and hides again; the
+optional paste-last-transcript shortcut or the menu bar's Copy inserts it
+later. Nothing is left on the clipboard.
 
 ## Current scope
 
 - One warm Realtime WebSocket with automatic reconnect and backoff; audio
   recorded while disconnected is replayed once the session is ready
-- Live transcript preview in an overlay placed above the focused field
+- Live transcript preview in a pill placed at the caret, with a 1 to 6 line cap
 - Direct Accessibility insertion with content-verified confirmation, and a
   clipboard fallback for Electron apps
 - Smart leading and trailing spaces at the caret

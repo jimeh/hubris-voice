@@ -3,7 +3,25 @@ import XCTest
 
 final class DictationSettingsTests: XCTestCase {
   func testLoadDefaultsFromEmptyStore() {
-    XCTAssertEqual(DictationSettings.load(from: MemorySettingsStore()), DictationSettings())
+    let settings = DictationSettings.load(from: MemorySettingsStore())
+
+    XCTAssertEqual(settings, DictationSettings())
+    XCTAssertEqual(settings.overlayLineCap, 3)
+  }
+
+  func testOverlayLineCapClampsStoredValues() {
+    XCTAssertEqual(
+      DictationSettings.load(
+        from: MemorySettingsStore(values: [DictationSettings.Key.overlayLineCap: 0])
+      ).overlayLineCap,
+      1
+    )
+    XCTAssertEqual(
+      DictationSettings.load(
+        from: MemorySettingsStore(values: [DictationSettings.Key.overlayLineCap: 9])
+      ).overlayLineCap,
+      6
+    )
   }
 
   func testRoundTripPreservesEverySetting() {
@@ -12,6 +30,7 @@ final class DictationSettingsTests: XCTestCase {
       prompt: "Names matter.",
       dictionary: ["Hucode"],
       overlayPlacement: .topOfScreen,
+      overlayLineCap: 6,
       smartLeadingSpace: false,
       trailingSpace: false,
       adjustCaseAfterComma: true,
@@ -93,6 +112,10 @@ private final class MemorySettingsStore: SettingsStore, @unchecked Sendable {
 
   func bool(_ key: String) -> Bool? {
     values[key] as? Bool
+  }
+
+  func integer(_ key: String) -> Int? {
+    values[key] as? Int
   }
 
   func set(_ value: Any?, for key: String) {

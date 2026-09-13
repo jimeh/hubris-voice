@@ -38,110 +38,16 @@ final class InteractionPolicyTests: XCTestCase {
     XCTAssertTrue(policy.shouldCommit(duration: 0.2))
   }
 
-  func testPasteSafetyRequiresSameNonSecureFocusedElement() {
-    let target = FocusSnapshot(
-      processID: 100,
-      elementToken: "editor-1",
-      isSecure: false
-    )
+  func testPasteSafetyAllowsNonSecureFocusInAnotherProcess() {
+    let current = FocusSnapshot(processID: 200, isSecure: false)
 
-    XCTAssertTrue(PasteSafety.canPaste(captured: target, current: target))
-    XCTAssertFalse(
-      PasteSafety.canPaste(
-        captured: target,
-        current: FocusSnapshot(
-          processID: 200,
-          elementToken: "editor-1",
-          isSecure: false
-        )
-      )
-    )
-    XCTAssertFalse(
-      PasteSafety.canPaste(
-        captured: target,
-        current: FocusSnapshot(
-          processID: 100,
-          elementToken: "editor-2",
-          isSecure: false
-        )
-      )
-    )
-    XCTAssertFalse(
-      PasteSafety.canPaste(
-        captured: target,
-        current: FocusSnapshot(
-          processID: 100,
-          elementToken: "editor-1",
-          isSecure: true
-        )
-      )
-    )
+    XCTAssertTrue(PasteSafety.canPaste(current: current))
   }
 
-  func testPasteSafetyAllowsApplicationFallbackOnlyForWeakCapture() {
-    let weakTarget = FocusSnapshot(
-      processID: 100,
-      elementToken: nil,
-      isSecure: false
-    )
+  func testPasteSafetyRejectsSecureFocus() {
+    let current = FocusSnapshot(processID: 200, isSecure: true)
 
-    XCTAssertEqual(
-      PasteSafety.decision(captured: weakTarget, current: weakTarget),
-      .sameApplication
-    )
-    XCTAssertEqual(
-      PasteSafety.decision(
-        captured: weakTarget,
-        current: FocusSnapshot(
-          processID: 100,
-          elementToken: "editor-1",
-          isSecure: false
-        )
-      ),
-      .sameApplication
-    )
-    XCTAssertEqual(
-      PasteSafety.decision(
-        captured: weakTarget,
-        current: FocusSnapshot(
-          processID: 200,
-          elementToken: nil,
-          isSecure: false
-        )
-      ),
-      .rejected
-    )
-  }
-
-  func testPasteSafetyRejectsChangedOrSecureStrongTargets() {
-    let target = FocusSnapshot(
-      processID: 100,
-      elementToken: "editor-1",
-      isSecure: false
-    )
-
-    XCTAssertEqual(
-      PasteSafety.decision(
-        captured: target,
-        current: FocusSnapshot(
-          processID: 100,
-          elementToken: nil,
-          isSecure: false
-        )
-      ),
-      .rejected
-    )
-    XCTAssertEqual(
-      PasteSafety.decision(
-        captured: target,
-        current: FocusSnapshot(
-          processID: 100,
-          elementToken: "editor-1",
-          isSecure: true
-        )
-      ),
-      .rejected
-    )
+    XCTAssertFalse(PasteSafety.canPaste(current: current))
   }
 
   func testSingleInstancePolicyRejectsAnotherRunningProcess() {

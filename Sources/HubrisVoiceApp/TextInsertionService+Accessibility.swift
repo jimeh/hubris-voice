@@ -228,19 +228,6 @@ extension TextInsertionService {
     return String.Index(utf16Index, within: value)
   }
 
-  func token(
-    for element: AXUIElement,
-    processID: pid_t
-  ) -> String {
-    if let identifier = stringAttribute(
-      kAXIdentifierAttribute,
-      from: element
-    ), !identifier.isEmpty {
-      return "\(processID):\(identifier)"
-    }
-    return "\(processID):\(CFHash(element))"
-  }
-
   func isSecure(element: AXUIElement) -> Bool {
     let subrole = stringAttribute(kAXSubroleAttribute, from: element)
     return subrole == (kAXSecureTextFieldSubrole as String)

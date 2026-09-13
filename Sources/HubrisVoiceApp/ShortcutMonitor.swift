@@ -30,7 +30,6 @@ final class ShortcutMonitor: @unchecked Sendable {
 
   var onAction: (@Sendable (ShortcutRole, ShortcutGesture.Action) -> Void)?
   var onEscape: (@Sendable () -> Void)?
-  var onReturn: (@Sendable () -> Void)?
   var onTapDisabled: (@Sendable () -> Void)?
 
   var capturesEscape: Bool {
@@ -46,23 +45,9 @@ final class ShortcutMonitor: @unchecked Sendable {
     }
   }
 
-  var capturesReturn: Bool {
-    get {
-      lock.lock()
-      defer { lock.unlock() }
-      return isCapturingReturn
-    }
-    set {
-      lock.lock()
-      isCapturingReturn = newValue
-      lock.unlock()
-    }
-  }
-
   private let lock = NSLock()
   private var gestures: [ShortcutRole: ShortcutGesture]
   private var isCapturingEscape = false
-  private var isCapturingReturn = false
   private var eventTap: CFMachPort?
   private var runLoopSource: CFRunLoopSource?
 
@@ -168,13 +153,6 @@ final class ShortcutMonitor: @unchecked Sendable {
     if type == .keyDown, keyCode == 53, capturesEscape {
       cancelHeldModifiers(forKeyCode: keyCode, modifiers: KeyModifiers(eventFlags: event.flags))
       onEscape?()
-      return true
-    }
-    if type == .keyDown, keyCode == 36, capturesReturn {
-      cancelHeldModifiers(forKeyCode: keyCode, modifiers: KeyModifiers(eventFlags: event.flags))
-      if !isRepeat {
-        onReturn?()
-      }
       return true
     }
     let modifiers = KeyModifiers(eventFlags: event.flags)

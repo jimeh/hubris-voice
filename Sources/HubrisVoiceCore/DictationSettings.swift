@@ -4,6 +4,7 @@ public protocol SettingsStore: AnyObject, Sendable {
   func string(_ key: String) -> String?
   func stringArray(_ key: String) -> [String]?
   func bool(_ key: String) -> Bool?
+  func integer(_ key: String) -> Int?
   func set(_ value: Any?, for key: String)
 }
 
@@ -37,6 +38,7 @@ public struct DictationSettings: Equatable, Sendable {
     public static let prompt = "transcription.prompt"
     public static let dictionary = "transcription.dictionary"
     public static let overlayPlacement = "overlay.placement"
+    public static let overlayLineCap = "overlay.lineCap"
     public static let smartLeadingSpace = "insertion.smartLeadingSpace"
     public static let trailingSpace = "insertion.trailingSpace"
     public static let adjustCaseAfterComma = "insertion.adjustCaseAfterComma"
@@ -57,6 +59,7 @@ public struct DictationSettings: Equatable, Sendable {
   public var prompt: String
   public var dictionary: [String]
   public var overlayPlacement: OverlayPlacementPreference
+  public var overlayLineCap: Int
   public var smartLeadingSpace: Bool
   public var trailingSpace: Bool
   public var adjustCaseAfterComma: Bool
@@ -73,6 +76,7 @@ public struct DictationSettings: Equatable, Sendable {
     prompt: String = Self.defaultPrompt,
     dictionary: [String] = [],
     overlayPlacement: OverlayPlacementPreference = .automatic,
+    overlayLineCap: Int = 3,
     smartLeadingSpace: Bool = true,
     trailingSpace: Bool = true,
     adjustCaseAfterComma: Bool = false,
@@ -88,6 +92,7 @@ public struct DictationSettings: Equatable, Sendable {
     self.prompt = prompt
     self.dictionary = dictionary
     self.overlayPlacement = overlayPlacement
+    self.overlayLineCap = overlayLineCap
     self.smartLeadingSpace = smartLeadingSpace
     self.trailingSpace = trailingSpace
     self.adjustCaseAfterComma = adjustCaseAfterComma
@@ -114,6 +119,7 @@ public struct DictationSettings: Equatable, Sendable {
       dictionary: store.stringArray(Key.dictionary) ?? [],
       overlayPlacement: store.string(Key.overlayPlacement)
         .flatMap(OverlayPlacementPreference.init(rawValue:)) ?? .automatic,
+      overlayLineCap: min(max(store.integer(Key.overlayLineCap) ?? 3, 1), 6),
       smartLeadingSpace: store.bool(Key.smartLeadingSpace) ?? true,
       trailingSpace: store.bool(Key.trailingSpace) ?? true,
       adjustCaseAfterComma: store.bool(Key.adjustCaseAfterComma) ?? false,
@@ -138,6 +144,7 @@ public struct DictationSettings: Equatable, Sendable {
     store.set(prompt, for: Key.prompt)
     store.set(dictionary, for: Key.dictionary)
     store.set(overlayPlacement.rawValue, for: Key.overlayPlacement)
+    store.set(overlayLineCap, for: Key.overlayLineCap)
     store.set(smartLeadingSpace, for: Key.smartLeadingSpace)
     store.set(trailingSpace, for: Key.trailingSpace)
     store.set(adjustCaseAfterComma, for: Key.adjustCaseAfterComma)

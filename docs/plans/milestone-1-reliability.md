@@ -237,23 +237,21 @@ Snippet events:
 | `cancelRequested` | only pending snippets | `pending = []` | `cancelFinalizingTimeout(g)` and `discardSnippet(g)` for each |
 | `cancelRequested` | nothing active | unchanged | none |
 | `dismissRequested` | `presented != nil` | `presented = nil` | `cancelDismiss` |
-| `copied` | `presented` has text | `presented` stays but mode becomes `copied` (track with a flag) | `cancelDismiss`, `scheduleDismiss(copiedLinger)` |
-| `pasteHereRequested` | `presented` is non-empty `.attempted`, `.rejected`, or `.timedOut` | allocate a new generation, move its text to `inserting`, clear `presented` | `cancelDismiss`, `insertAtCurrentFocus(g, text)` |
 | `pasteLastRequested(text)` | not listening, `text` non-empty | allocate a new generation, move `text` to `inserting`, clear `presented` | `cancelDismiss`, `insertAtCurrentFocus(g, text)` |
 | `pasteLastRequested(text)` | listening or `text` empty | unchanged | none |
-| `localError(m)` | `listening != nil` | `listening = nil`, `presented = .error(m, transcript)` | `stopCapture`, `clearAudio(g)`, `discardSnippet(g)`, `scheduleDismiss(attentionLinger)` if transcript empty |
+| `localError(m)` | `listening != nil` | `listening = nil`, `presented = .error(m, transcript)` | `stopCapture`, `clearAudio(g)`, `discardSnippet(g)`, `scheduleDismiss(attentionLinger)` |
 | `localError(m)` | otherwise | `presented = .error(m, "")` | `scheduleDismiss(attentionLinger)` |
 | `server(.inputCommitted(id))` | first pending snippet with `itemID == nil` exists | that snippet gets `itemID` | none |
 | `server(.transcriptDelta(id, d))` | pending snippet with `itemID == id` | append `d` | none |
 | `server(.transcriptDelta(id, d))` | no pending match, listening snippet with `itemID` nil or `== id` | listening snippet adopts `id`, appends `d` (live preview) | none |
 | `server(.transcriptCompleted(id, t))` | pending snippet with that id, trimmed `t` empty | remove from pending, `presented = .error("No speech was detected.", "")` | `cancelFinalizingTimeout(g)`, `clearAudio(g)`, `discardSnippet(g)`, `scheduleDismiss(attentionLinger)` |
 | `server(.transcriptCompleted(id, t))` | pending snippet with that id | move to `inserting` with `transcript = t` | `cancelFinalizingTimeout(g)`, `clearAudio(g)`, `insert(g, t)` |
-| `server(.error(m))` | any snippet live | `presented = .error(m, newest transcript)`; listening snippet cancelled as `cancelRequested`; pending snippets untouched | as `cancelRequested` for the listening snippet, `scheduleDismiss(attentionLinger)` if text empty |
+| `server(.error(m))` | any snippet live | `presented = .error(m, newest transcript)`; listening snippet cancelled as `cancelRequested`; pending snippets untouched | as `cancelRequested` for the listening snippet, `scheduleDismiss(attentionLinger)` |
 | `server(.error(m))` | nothing live | `presented = .error(m, "")` | `scheduleDismiss(attentionLinger)` |
-| `finalizingTimedOut(g)` | pending snippet `g` | remove, `presented = .timedOut(transcript)` | `clearAudio(g)`, `discardSnippet(g)`; `scheduleDismiss(attentionLinger)` only if transcript empty |
+| `finalizingTimedOut(g)` | pending snippet `g` | remove, `presented = .timedOut(transcript)` | `clearAudio(g)`, `discardSnippet(g)`, `scheduleDismiss(attentionLinger)` |
 | `insertionFinished(g, .confirmed)` | inserting `g` | remove, `presented = nil` | `discardSnippet(g)`, `cancelDismiss` |
-| `insertionFinished(g, .attempted)` | inserting `g` | remove, `presented = .attempted(text)` | `discardSnippet(g)`, `cancelDismiss`, `scheduleDismiss(attentionLinger)` |
-| `insertionFinished(g, .rejected, reason)` | inserting `g` | remove, `presented = .rejected(text, reason)` | `discardSnippet(g)`, `cancelDismiss` |
+| `insertionFinished(g, .attempted)` | inserting `g` | remove, `presented = nil` | `discardSnippet(g)`, `cancelDismiss` |
+| `insertionFinished(g, .rejected, reason)` | inserting `g` | remove, `presented = .rejected(text, reason)` | `discardSnippet(g)`, `cancelDismiss`, `scheduleDismiss(attentionLinger)` |
 
 Notes:
 
@@ -264,13 +262,11 @@ Notes:
   result while another snippet is listening, `presented` is set but the
   overlay keeps showing the listening snippet until it stops, then shows the
   result. `pendingCount` lets the overlay hint that work is queued.
-- `insert` carries only the generation and text. The app looks up the focus
-  captured at press time by generation.
+- `insert` carries only the generation and text. The app resolves the focused
+  target when it interprets the insertion effect.
 - Every path that ends listening clears `isLocked`. While locked, the listening
-  presentation uses "Locked · tap to finish" and sets `isLocked` for the
-  overlay lock glyph.
-- Paste-last insertion outcomes use the same presentation as recovery paste.
-  The app also copies paste-last text when insertion is rejected.
+  presentation sets `isLocked` for the overlay lock glyph.
+- Paste-last insertion outcomes use the same presentation as dictation insertion.
 
 ### `ReconnectPolicy.swift`
 

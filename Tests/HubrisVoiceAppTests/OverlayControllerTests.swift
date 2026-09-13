@@ -5,12 +5,7 @@ import XCTest
 final class OverlayControllerTests: XCTestCase {
   func testTranscriptGrowthLeavesWindowSizingToTheController() {
     let model = OverlayViewModel()
-    let controller = OverlayController(
-      model: model,
-      onPasteHere: {},
-      onCopy: {},
-      onDismiss: {}
-    )
+    let controller = OverlayController(model: model)
     controller.show(
       anchor: nil,
       preference: .bottomOfScreen

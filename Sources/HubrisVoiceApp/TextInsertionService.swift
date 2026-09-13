@@ -50,9 +50,6 @@ final class TextInsertionService {
     return CapturedFocus(
       snapshot: FocusSnapshot(
         processID: processID,
-        elementToken: focusedElement.map {
-          token(for: $0, processID: processID)
-        },
         isSecure: focusedElement.map(isSecure) ?? false
       ),
       targetBundleID: application.bundleIdentifier,
@@ -147,52 +144,16 @@ final class TextInsertionService {
     )
   }
 
-  func paste(
-    _ text: String,
-    into target: CapturedFocus,
-    expected: String
-  ) async -> PasteResult {
-    guard let current = captureFocusedTarget() else {
-      return PasteResult(
-        outcome: .rejected,
-        reason: target.snapshot.isSecure ? .secureField : .focusChanged
-      )
-    }
-    return await insert(
-      text,
-      target: target,
-      current: current,
-      expected: expected
-    )
-  }
-
-  func pasteAtCurrentFocus(_ text: String) async -> PasteResult {
+  /// Resolves the target at call time. A frontmost app that exposes no
+  /// focused element is still attempted through the clipboard, because some
+  /// Electron windows hide the focused field from Accessibility while it
+  /// accepts a paste. Only a missing frontmost app or a secure field rejects.
+  func insert(_ text: String, expected: String) async -> PasteResult {
     guard let current = captureFocusedTarget() else {
       return PasteResult(outcome: .rejected, reason: .noTarget)
     }
-    guard !current.snapshot.isSecure else {
+    guard PasteSafety.canPaste(current: current.snapshot) else {
       return PasteResult(outcome: .rejected, reason: .secureField)
-    }
-    return await insert(
-      text,
-      target: current,
-      current: current,
-      expected: text
-    )
-  }
-
-  /// Applies the focus guard, then tries direct Accessibility insertion
-  /// before falling back to a clipboard paste. An ambiguous direct write is
-  /// final: it is never followed by a clipboard paste, so one snippet can
-  /// never be inserted twice.
-  private func insert(
-    _ text: String,
-    target: CapturedFocus,
-    current: CapturedFocus,
-    expected: String
-  ) async -> PasteResult {
-    if let rejection = focusRejection(target: target, current: current) {
-      return rejection
     }
 
     if
@@ -208,33 +169,6 @@ final class TextInsertionService {
       current: current,
       expected: expected
     )
-  }
-
-  private func focusRejection(
-    target: CapturedFocus,
-    current: CapturedFocus
-  ) -> PasteResult? {
-    let decision = PasteSafety.decision(
-      captured: target.snapshot,
-      current: current.snapshot
-    )
-    guard decision != .rejected else {
-      let reason: DictationSession.RejectionReason =
-        target.snapshot.isSecure || current.snapshot.isSecure
-          ? .secureField
-          : .focusChanged
-      return PasteResult(outcome: .rejected, reason: reason)
-    }
-    if decision == .exactElement {
-      guard
-        let targetElement = target.element,
-        let currentElement = current.element,
-        CFEqual(targetElement, currentElement)
-      else {
-        return PasteResult(outcome: .rejected, reason: .focusChanged)
-      }
-    }
-    return nil
   }
 
   /// Returns nil only when the element cannot take a direct write at all
@@ -300,7 +234,7 @@ final class TextInsertionService {
     pasteboard.clearContents()
     guard pasteboard.setString(text, forType: .string) else {
       previousContents.restore(to: pasteboard)
-      return PasteResult(outcome: .rejected, reason: .focusChanged)
+      return PasteResult(outcome: .attempted, reason: nil)
     }
     let dictatedChangeCount = pasteboard.changeCount
 
@@ -318,7 +252,7 @@ final class TextInsertionService {
       )
     else {
       previousContents.restore(to: pasteboard)
-      return PasteResult(outcome: .rejected, reason: .focusChanged)
+      return PasteResult(outcome: .attempted, reason: nil)
     }
     keyDown.flags = .maskCommand
     keyUp.flags = .maskCommand

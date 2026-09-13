@@ -46,6 +46,13 @@ final class AppModel: ObservableObject {
     }
   }
 
+  @Published var overlayLineCap: Int {
+    didSet {
+      guard overlayLineCap != oldValue else { return }
+      updateSettings { $0.overlayLineCap = overlayLineCap }
+    }
+  }
+
   @Published var smartLeadingSpace: Bool {
     didSet {
       guard smartLeadingSpace != oldValue else { return }
@@ -194,7 +201,6 @@ final class AppModel: ObservableObject {
     case .listening: "waveform.circle.fill"
     case .finalizing: "ellipsis.circle"
     case .attention: "exclamationmark.circle"
-    case .completed, .copied: "waveform.circle"
     case nil:
       switch session.connection {
       case .connecting, .disconnected: "ellipsis.circle"
@@ -207,7 +213,6 @@ final class AppModel: ObservableObject {
     switch session.presentation?.mode {
     case .listening: .signalBlue
     case .finalizing, .attention: .voiceCoral
-    case .completed, .copied: .completionMint
     case nil:
       switch session.connection {
       case .ready: .completionMint
@@ -241,12 +246,10 @@ final class AppModel: ObservableObject {
   private var session: DictationSession
   private(set) var settings: DictationSettings
   private var buffers: [Int: AudioSnippetBuffer] = [:]
-  private var focus: [Int: CapturedFocus] = [:]
   private var currentAnchor: OverlayAnchor?
   private var streamingGeneration: Int?
   private var finalizingTimers: [Int: Task<Void, Never>] = [:]
   private var eventTask: Task<Void, Never>?
-  private var elapsedTask: Task<Void, Never>?
   private var stopCaptureTask: Task<Void, Never>?
   private var permissionPollingTask: Task<Void, Never>?
   private var transportTask: Task<Void, Never>?
@@ -261,7 +264,6 @@ final class AppModel: ObservableObject {
   private var pendingConfigurationAcks = 0
   private var isRefreshingLoginItemStatus = false
   private var didWarnForFnBinding = false
-  private var pasteLastInsertionGenerations: Set<Int> = []
   private var historyEntryIDs: [Int: UUID] = [:]
   private var presentedHistoryEntryID: UUID?
 
@@ -285,6 +287,7 @@ final class AppModel: ObservableObject {
     languages = settings.languages
     prompt = settings.prompt
     overlayPlacement = settings.overlayPlacement
+    overlayLineCap = settings.overlayLineCap
     smartLeadingSpace = settings.smartLeadingSpace
     trailingSpace = settings.trailingSpace
     adjustCaseAfterComma = settings.adjustCaseAfterComma
@@ -333,9 +336,6 @@ final class AppModel: ObservableObject {
     }
     shortcutMonitor.onEscape = { [weak self] in
       Task { @MainActor [weak self] in self?.apply(.cancelRequested) }
-    }
-    shortcutMonitor.onReturn = { [weak self] in
-      Task { @MainActor [weak self] in self?.handleReturn() }
     }
     shortcutMonitor.onTapDisabled = { [weak self] in
       Task { @MainActor [weak self] in self?.cancelLockedRecording() }
@@ -514,20 +514,6 @@ final class AppModel: ObservableObject {
     historyDidChange()
   }
 
-  func copyResult() {
-    guard let presentation = session.presentation, presentation.canCopy else { return }
-    insertionService.copy(presentation.transcript)
-    apply(.copied)
-  }
-
-  func dismissOverlay() {
-    apply(.dismissRequested)
-  }
-
-  func pasteHere() {
-    apply(.pasteHereRequested)
-  }
-
   func setShortcut(_ binding: ShortcutBinding?, for role: ShortcutRole) {
     var updated = shortcuts
     switch role {
@@ -615,7 +601,7 @@ final class AppModel: ObservableObject {
         return nil
       }
       updateHistory(id: entryID, outcome: outcome.historyOutcome)
-      presentedHistoryEntryID = outcome == .confirmed ? nil : entryID
+      presentedHistoryEntryID = outcome == .rejected ? entryID : nil
     case .finalizingTimedOut(let generation):
       guard
         let snippet = session.pending.first(where: { $0.generation == generation }),
@@ -629,10 +615,6 @@ final class AppModel: ObservableObject {
         outcome: .timedOut
       )
       presentedHistoryEntryID = entryID
-    case .copied:
-      if let presentedHistoryEntryID {
-        updateHistory(id: presentedHistoryEntryID, outcome: .copied)
-      }
     case .cancelRequested:
       if let listening = session.listening {
         recordCancelledTranscript(listening)
@@ -653,8 +635,6 @@ final class AppModel: ObservableObject {
       }
     case .dismissRequested, .dismissDelayElapsed:
       presentedHistoryEntryID = nil
-    case .pasteHereRequested:
-      return presentedHistoryEntryID
     case .pasteLastRequested(let text):
       return history.latest?.text == text ? history.latest?.id : nil
     default:
@@ -667,7 +647,8 @@ final class AppModel: ObservableObject {
   private func recordTranscript(
     generation: Int,
     text: String,
-    outcome: TranscriptEntry.Outcome
+    outcome: TranscriptEntry.Outcome,
+    targetBundleID: String? = nil
   ) -> UUID? {
     guard !text.isEmpty else { return nil }
     if let entryID = historyEntryIDs[generation] {
@@ -676,7 +657,7 @@ final class AppModel: ObservableObject {
     }
     let entry = TranscriptEntry(
       text: text,
-      targetBundleID: focus[generation]?.targetBundleID,
+      targetBundleID: targetBundleID,
       outcome: outcome
     )
     history.record(entry)
@@ -742,13 +723,6 @@ final class AppModel: ObservableObject {
   private func apply(_ event: DictationSession.Event) {
     let insertionGeneration = session.nextGeneration
     let historyEntryForNewInsertion = prepareHistory(for: event)
-    let rejectedPasteLastText: String? =
-      if case .insertionFinished(let generation, .rejected, _) = event,
-      pasteLastInsertionGenerations.contains(generation) {
-        session.inserting.first { $0.generation == generation }?.transcript
-      } else {
-        nil
-      }
     let insertionTelemetry: InsertionTelemetry? =
       if case .insertionFinished(let generation, let outcome, _) = event,
       session.inserting.contains(where: { $0.generation == generation }) {
@@ -778,14 +752,8 @@ final class AppModel: ObservableObject {
     for effect in effects {
       interpret(effect)
     }
-    if let rejectedPasteLastText {
-      insertionService.copy(rejectedPasteLastText)
-    }
-    if case .insertionFinished(let generation, _, _) = event {
-      pasteLastInsertionGenerations.remove(generation)
-    }
     if let insertionTelemetry {
-      if insertionTelemetry.outcome == .confirmed {
+      if insertionTelemetry.outcome == .confirmed || insertionTelemetry.outcome == .attempted {
         flashConfirmed()
       }
       playInsertionSound(for: insertionTelemetry.outcome)
@@ -833,11 +801,16 @@ final class AppModel: ObservableObject {
       scheduleFinalizingTimeout(generation: generation, delay: delay)
     case .cancelFinalizingTimeout(let generation): cancelFinalizingTimeout(generation: generation)
     case .recordTranscript(let generation, let text):
-      recordTranscript(generation: generation, text: text, outcome: .attempted)
+      recordTranscript(
+        generation: generation,
+        text: text,
+        outcome: .attempted,
+        targetBundleID: insertionService.captureFocusedTarget()?.targetBundleID
+      )
     case .insert(let generation, let text): insert(generation: generation, text: text)
     case .insertAtCurrentFocus(let generation, let text):
       releasedAt[generation] = Date()
-      insertAtCurrentFocus(generation: generation, text: text)
+      insert(generation: generation, text: text)
     case .scheduleDismiss(let delay):
       dismissScheduler.schedule(after: delay) { [weak self] in self?.apply(.dismissDelayElapsed) }
     case .cancelDismiss: dismissScheduler.cancel()
@@ -848,9 +821,19 @@ final class AppModel: ObservableObject {
   private func publishSessionState() {
     phaseTitle = session.phaseTitle
     shortcutMonitor.capturesEscape = session.presentation != nil
-    shortcutMonitor.capturesReturn = session.presentation?.mode == .attention
     if let presentation = session.presentation {
-      overlayModel.apply(presentation)
+      let overlayPresentation = if presentation.mode == .attention {
+        OverlayPresentation(
+          mode: presentation.mode,
+          transcript: presentation.transcript,
+          message: "\(presentation.message) · \(recoveryHint)",
+          pendingCount: presentation.pendingCount,
+          isLocked: presentation.isLocked
+        )
+      } else {
+        presentation
+      }
+      overlayModel.apply(overlayPresentation)
       overlayController?.show(
         anchor: currentAnchor,
         preference: overlayPlacement
@@ -907,11 +890,7 @@ final class AppModel: ObservableObject {
       flashAttention()
       return
     }
-    let generation = session.nextGeneration
     apply(.pasteLastRequested(text: lastTranscript))
-    if session.inserting.contains(where: { $0.generation == generation }) {
-      pasteLastInsertionGenerations.insert(generation)
-    }
   }
 
   private func handleRelease() {
@@ -943,14 +922,6 @@ final class AppModel: ObservableObject {
       try? await Task.sleep(for: .milliseconds(1_200))
       guard let self, lastAttentionAt == attentionAt else { return }
       lastAttentionAt = nil
-    }
-  }
-
-  private func handleReturn() {
-    if session.presentation?.canPasteHere == true {
-      apply(.pasteHereRequested)
-    } else {
-      copyResult()
     }
   }
 
@@ -999,7 +970,6 @@ final class AppModel: ObservableObject {
     stopCaptureTask?.cancel()
     stopCaptureTask = nil
     let capturedFocus = insertionService.captureFocusedTarget()
-    focus[generation] = capturedFocus
     currentAnchor = insertionService.captureAnchor(for: capturedFocus)
     buffers[generation] = AudioSnippetBuffer()
     streamingGeneration = generation
@@ -1007,7 +977,6 @@ final class AppModel: ObservableObject {
     overlayModel.beginListening()
     do {
       try audioCapture.start()
-      startElapsedTimer()
     } catch {
       apply(.localError(message: error.localizedDescription))
     }
@@ -1022,19 +991,6 @@ final class AppModel: ObservableObject {
       guard !Task.isCancelled, let self, streamingGeneration == stoppingGeneration else { return }
       audioCapture.stop()
       streamingGeneration = nil
-      elapsedTask?.cancel()
-      elapsedTask = nil
-    }
-  }
-
-  private func startElapsedTimer() {
-    elapsedTask?.cancel()
-    elapsedTask = Task { [weak self] in
-      while !Task.isCancelled {
-        guard let self, let startedAt = recordingStartedAt else { return }
-        overlayModel.elapsed = Date().timeIntervalSince(startedAt)
-        try? await Task.sleep(for: .milliseconds(100))
-      }
     }
   }
 
@@ -1053,46 +1009,23 @@ final class AppModel: ObservableObject {
 
   private func discardSnippet(generation: Int) {
     buffers.removeValue(forKey: generation)
-    focus.removeValue(forKey: generation)
     releasedAt.removeValue(forKey: generation)
     historyEntryIDs.removeValue(forKey: generation)
     cancelFinalizingTimeout(generation: generation)
   }
 
   private func insert(generation: Int, text: String) {
-    guard let target = focus[generation] else {
-      apply(.insertionFinished(generation: generation, outcome: .rejected, reason: .noTarget))
-      return
-    }
+    let context = insertionService.captureFocusedTarget().map {
+      insertionService.currentTextContext(for: $0)
+    } ?? InsertionFormatter.Context(textBeforeCaret: nil, textAfterCaret: nil)
     let formatted = InsertionFormatter.format(
       text,
-      context: insertionService.currentTextContext(for: target),
+      context: context,
       options: insertionOptions
     )
     Task { [weak self] in
       guard let self else { return }
-      let result = await insertionService.paste(
-        formatted,
-        into: target,
-        expected: formatted
-      )
-      apply(.insertionFinished(generation: generation, outcome: result.outcome, reason: result.reason))
-    }
-  }
-
-  private func insertAtCurrentFocus(generation: Int, text: String) {
-    guard let target = insertionService.captureFocusedTarget() else {
-      apply(.insertionFinished(generation: generation, outcome: .rejected, reason: .noTarget))
-      return
-    }
-    let formatted = InsertionFormatter.format(
-      text,
-      context: insertionService.currentTextContext(for: target),
-      options: insertionOptions
-    )
-    Task { [weak self] in
-      guard let self else { return }
-      let result = await insertionService.pasteAtCurrentFocus(formatted)
+      let result = await insertionService.insert(formatted, expected: formatted)
       apply(.insertionFinished(generation: generation, outcome: result.outcome, reason: result.reason))
     }
   }
@@ -1104,6 +1037,13 @@ final class AppModel: ObservableObject {
       adjustCaseAfterComma: adjustCaseAfterComma,
       protectedTerms: dictionaryWords
     )
+  }
+
+  private var recoveryHint: String {
+    if let binding = shortcuts.pasteLastTranscript {
+      return "\(binding.displayName) inserts it"
+    }
+    return "Copy it from the menu bar"
   }
 
   private var dictionaryTermSummary: String {
@@ -1122,10 +1062,10 @@ final class AppModel: ObservableObject {
 
   private func playInsertionSound(for outcome: PasteOutcome) {
     switch outcome {
-    case .confirmed where pastedSoundEnabled:
+    case .confirmed where pastedSoundEnabled,
+         .attempted where pastedSoundEnabled:
       soundCues.playPasted()
-    case .attempted where rejectedSoundEnabled,
-         .rejected where rejectedSoundEnabled:
+    case .rejected where rejectedSoundEnabled:
       soundCues.playRejected()
     default:
       break
@@ -1252,6 +1192,10 @@ extension UserDefaults: SettingsStore {
 
   public func bool(_ key: String) -> Bool? {
     object(forKey: key) as? Bool
+  }
+
+  public func integer(_ key: String) -> Int? {
+    object(forKey: key) as? Int
   }
 
   public func set(_ value: Any?, for key: String) {

@@ -39,6 +39,16 @@ struct GeneralSettingsTab: View {
           .labelsHidden()
           .frame(width: 170)
         }
+        SettingsRow(
+          title: "Overlay lines",
+          caption: "1 keeps a single line and scrolls sideways."
+        ) {
+          Stepper(value: $model.overlayLineCap, in: 1 ... 6) {
+            Text("\(model.overlayLineCap)")
+              .monospacedDigit()
+          }
+          .accessibilityLabel("Overlay lines")
+        }
         SettingsRow(title: "Dictation enabled", caption: "Also available from the menu bar.") {
           Toggle("Dictation enabled", isOn: $model.dictationEnabled).labelsHidden()
         }
@@ -294,8 +304,7 @@ struct ShortcutsSettingsTab: View {
       Section("Recovery") {
         SettingsRow(
           title: "Paste last transcript",
-          caption: "Inserts the most recent transcript into the focused field. "
-            + "Copies to the clipboard if insertion fails."
+          caption: "Inserts the most recent transcript into the focused field."
         ) {
           ShortcutRecorder(
             model: model,

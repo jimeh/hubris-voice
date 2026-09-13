@@ -12,18 +12,7 @@ final class AppEnvironment {
   private init() {
     let model = AppModel()
     self.model = model
-    overlay = OverlayController(
-      model: model.overlayModel,
-      onPasteHere: { [weak model] in
-        model?.pasteHere()
-      },
-      onCopy: { [weak model] in
-        model?.copyResult()
-      },
-      onDismiss: { [weak model] in
-        model?.dismissOverlay()
-      }
-    )
+    overlay = OverlayController(model: model.overlayModel)
     model.overlayController = overlay
   }
 }

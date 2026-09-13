@@ -1,9 +1,6 @@
 @testable import HubrisVoiceCore
 import XCTest
 
-// The transition tests stay together for review against the design contracts.
-// swiftlint:disable file_length
-
 final class DictationSessionTests: XCTestCase {
   func testConnectionLossSchedulesFirstReconnectAttempt() {
     var session = readySession()
@@ -121,7 +118,7 @@ final class DictationSessionTests: XCTestCase {
     XCTAssertEqual(session.transition(.released(heldDuration: 0.1)), [])
     XCTAssertTrue(session.isLocked)
     XCTAssertEqual(session.listening?.generation, 0)
-    XCTAssertEqual(session.presentation?.message, "Locked · tap to finish")
+    XCTAssertEqual(session.presentation?.message, "")
     XCTAssertEqual(session.presentation?.isLocked, true)
 
     XCTAssertEqual(
@@ -289,7 +286,11 @@ final class DictationSessionTests: XCTestCase {
 
     XCTAssertEqual(
       session.transition(.finalizingTimedOut(generation: 0)),
-      [.clearAudio(generation: 0), .discardSnippet(generation: 0)]
+      [
+        .clearAudio(generation: 0),
+        .discardSnippet(generation: 0),
+        .scheduleDismiss(after: .seconds(4)),
+      ]
     )
     XCTAssertEqual(session.presented, .timedOut(text: "partial"))
     XCTAssertEqual(session.transition(.finalizingTimedOut(generation: 0)), [])
@@ -350,57 +351,37 @@ final class DictationSessionTests: XCTestCase {
     XCTAssertEqual(session.presented, .error(message: "capture failed", text: ""))
   }
 
-  func testEveryPresentedResultCanBeDismissed() {
-    for result in presentedResults {
-      var session = sessionPresenting(result)
-      XCTAssertEqual(session.presentation?.canDismiss, true)
-      XCTAssertEqual(session.transition(.dismissRequested), [.cancelDismiss])
-      XCTAssertNil(session.presented)
-    }
+  func testAttemptedInsertionClearsPresentationWithoutLinger() {
+    var session = insertingSession(text: "hello")
+
+    XCTAssertEqual(
+      session.transition(.insertionFinished(generation: 0, outcome: .attempted, reason: nil)),
+      [.discardSnippet(generation: 0), .cancelDismiss]
+    )
+    XCTAssertNil(session.presented)
+    XCTAssertNil(session.presentation)
   }
 
-  func testUnconfirmedInsertionOutcomesPresentCorrectMessagesAndLinger() {
-    let cases = [
-      InsertionCase(
-        outcome: .attempted,
-        reason: nil,
-        mode: .attention,
-        message: "Paste attempted · copy if needed",
-        effects: [.discardSnippet(generation: 0), .cancelDismiss, .scheduleDismiss(after: .seconds(4))]
-      ),
-      InsertionCase(
-        outcome: .rejected,
-        reason: .noTarget,
-        mode: .attention,
-        message: "No target app was captured · copy instead",
-        effects: [.discardSnippet(generation: 0), .cancelDismiss]
-      ),
-      InsertionCase(
-        outcome: .rejected,
-        reason: .focusChanged,
-        mode: .attention,
-        message: "Focus or app changed · copy instead",
-        effects: [.discardSnippet(generation: 0), .cancelDismiss]
-      ),
-      InsertionCase(
-        outcome: .rejected,
-        reason: .secureField,
-        mode: .attention,
-        message: "Secure field · copy instead",
-        effects: [.discardSnippet(generation: 0), .cancelDismiss]
-      ),
+  func testRejectedInsertionPresentsReasonAndSchedulesDismiss() {
+    let cases: [(DictationSession.RejectionReason, String)] = [
+      (.noTarget, "No text field is focused"),
+      (.secureField, "Secure field"),
     ]
 
-    for testCase in cases {
+    for (reason, message) in cases {
       var session = insertingSession(text: "hello")
       XCTAssertEqual(
         session.transition(
-          .insertionFinished(generation: 0, outcome: testCase.outcome, reason: testCase.reason)
+          .insertionFinished(generation: 0, outcome: .rejected, reason: reason)
         ),
-        testCase.effects
+        [
+          .discardSnippet(generation: 0),
+          .cancelDismiss,
+          .scheduleDismiss(after: .seconds(4)),
+        ]
       )
-      XCTAssertEqual(session.presentation?.mode, testCase.mode)
-      XCTAssertEqual(session.presentation?.message, testCase.message)
+      XCTAssertEqual(session.presented, .rejected(text: "hello", reason: reason))
+      XCTAssertEqual(session.presentation?.message, message)
     }
   }
 
@@ -413,27 +394,6 @@ final class DictationSessionTests: XCTestCase {
     )
     XCTAssertNil(session.presented)
     XCTAssertNil(session.presentation)
-  }
-
-  func testPasteHereFromRejectedStartsFreshInsertionAndClearsPresentation() {
-    var session = sessionPresenting(.rejected(text: "hello", reason: .focusChanged))
-
-    XCTAssertEqual(
-      session.transition(.pasteHereRequested),
-      [.cancelDismiss, .insertAtCurrentFocus(generation: 1, text: "hello")]
-    )
-    XCTAssertEqual(session.inserting, [.init(generation: 1, transcript: "hello")])
-    XCTAssertNil(session.presented)
-    XCTAssertEqual(session.transition(.pasteHereRequested), [])
-  }
-
-  func testPasteHereWhileListeningIsIgnored() {
-    var session = readySession()
-    _ = session.transition(.pressed)
-
-    XCTAssertEqual(session.transition(.pasteHereRequested), [])
-    XCTAssertEqual(session.listening?.generation, 0)
-    XCTAssertTrue(session.inserting.isEmpty)
   }
 
   func testPasteLastAllocatesGenerationAndInsertsAtCurrentFocus() {
@@ -456,27 +416,6 @@ final class DictationSessionTests: XCTestCase {
     XCTAssertTrue(session.inserting.isEmpty)
   }
 
-  func testAttentionPresentationWithTextCanPasteHere() {
-    let session = sessionPresenting(.rejected(text: "hello", reason: .focusChanged))
-
-    XCTAssertEqual(session.presentation?.mode, .attention)
-    XCTAssertEqual(session.presentation?.canPasteHere, true)
-  }
-
-  func testRecoveryGenerationCanOnlyFinishOnce() {
-    var session = sessionPresenting(.attempted(text: "hello"))
-    _ = session.transition(.pasteHereRequested)
-
-    XCTAssertEqual(
-      session.transition(.insertionFinished(generation: 1, outcome: .confirmed, reason: nil)),
-      [.discardSnippet(generation: 1), .cancelDismiss]
-    )
-    XCTAssertEqual(
-      session.transition(.insertionFinished(generation: 1, outcome: .confirmed, reason: nil)),
-      []
-    )
-  }
-
   func testStaleInsertionCompletionCannotReplacePresentation() {
     var session = insertingSession(text: "hello")
 
@@ -493,30 +432,13 @@ final class DictationSessionTests: XCTestCase {
     _ = session.transition(.pressed)
 
     XCTAssertEqual(session.presentation?.pendingCount, 1)
-    XCTAssertEqual(session.presentation?.message, "Release to insert")
+    XCTAssertEqual(session.presentation?.message, "")
     _ = session.transition(.connectionLost(message: "lost"))
     XCTAssertEqual(session.presentation?.message, "Reconnecting…")
   }
 }
 
-private struct InsertionCase {
-  let outcome: PasteOutcome
-  let reason: DictationSession.RejectionReason?
-  let mode: OverlayPresentation.Mode
-  let message: String
-  let effects: [DictationSession.Effect]
-}
-
 private extension DictationSessionTests {
-  var presentedResults: [DictationSession.PresentedResult] {
-    [
-      .attempted(text: "text"),
-      .rejected(text: "text", reason: .noTarget),
-      .timedOut(text: "text"),
-      .error(message: "error", text: "text"),
-    ]
-  }
-
   func readySession(
     configuration: DictationSession.Configuration = .init()
   ) -> DictationSession {
@@ -545,37 +467,6 @@ private extension DictationSessionTests {
     _ = makePending(in: &session, itemID: "item")
     _ = session.transition(.server(.transcriptCompleted(itemID: "item", transcript: text)))
     return session
-  }
-
-  func sessionPresenting(_ result: DictationSession.PresentedResult) -> DictationSession {
-    var session: DictationSession
-    switch result {
-    case .confirmed:
-      session = insertingSession(text: resultText(result))
-      _ = session.transition(.insertionFinished(generation: 0, outcome: .confirmed, reason: nil))
-    case .attempted:
-      session = insertingSession(text: resultText(result))
-      _ = session.transition(.insertionFinished(generation: 0, outcome: .attempted, reason: nil))
-    case .rejected(_, let reason):
-      session = insertingSession(text: resultText(result))
-      _ = session.transition(.insertionFinished(generation: 0, outcome: .rejected, reason: reason))
-    case .timedOut:
-      session = readySession()
-      _ = makePending(in: &session, itemID: "item")
-      _ = session.transition(.server(.transcriptDelta(itemID: "item", delta: resultText(result))))
-      _ = session.transition(.finalizingTimedOut(generation: 0))
-    case .error(let message, _):
-      session = readySession()
-      _ = session.transition(.localError(message: message))
-    }
-    return session
-  }
-
-  func resultText(_ result: DictationSession.PresentedResult) -> String {
-    switch result {
-    case .confirmed(let text), .attempted(let text), .timedOut(let text): text
-    case .rejected(let text, _), .error(_, let text): text
-    }
   }
 }
 
