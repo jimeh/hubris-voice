@@ -6,6 +6,7 @@ repo_dir="${0:A:h:h}"
 info_plist="${repo_dir}/Support/Info.plist"
 entitlements="${repo_dir}/Support/HubrisVoice.entitlements"
 release_config="${repo_dir}/.github/release-please-config.json"
+release_github_script="${repo_dir}/Scripts/release-github.sh"
 test_count=0
 
 assert_equal() {
@@ -55,6 +56,14 @@ assert_equal \
   "release is created as a draft" \
   true \
   "$(plutil -extract draft raw -o - "${release_config}")"
+assert_equal \
+  "draft release is resolved to its database identifier" \
+  1 \
+  "$(rg -c -- '--json databaseId' "${release_github_script}")"
+assert_absent \
+  "draft operations avoid the published-release tag endpoint" \
+  '/releases/tags/' \
+  "${release_github_script}"
 assert_equal \
   "release entitlement count" \
   1 \

@@ -5,6 +5,7 @@ set -euo pipefail
 script_dir="${0:A:h}"
 repo_dir="${script_dir:h}"
 release_dist_dir="${RELEASE_DIST_DIR:-${repo_dir}/dist}"
+release_id=""
 
 required_env() {
   local variable_name="$1"
@@ -50,8 +51,14 @@ validate_draft() {
     print -u2 -- "Tag ${RELEASE_TAG} resolves to ${tag_sha}, expected ${RELEASE_SHA}"
     exit 1
   fi
-  draft="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .draft)"
-  release_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .tag_name)"
+  release_id="$(gh release view "${RELEASE_TAG}" \
+    --repo "${GITHUB_REPOSITORY}" --json databaseId --jq .databaseId)"
+  if [[ ! "${release_id}" =~ '^[0-9]+$' ]]; then
+    print -u2 -- "Could not resolve release ${RELEASE_TAG} to an identifier"
+    exit 1
+  fi
+  draft="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" --jq .draft)"
+  release_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" --jq .tag_name)"
   if [[ "${draft}" != true ]] || [[ "${release_tag}" != "${RELEASE_TAG}" ]]; then
     print -u2 -- "Release ${RELEASE_TAG} must be the exact draft target"
     exit 1
@@ -63,7 +70,7 @@ validate_asset_inventory() {
   local expected_names
   local actual_names
   expected_names="$(asset_names | sort)"
-  actual_names="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" \
+  actual_names="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
     --jq '.assets[].name' | sort)"
   if [[ "${allow_missing}" == true ]]; then
     while IFS= read -r actual_name; do
@@ -99,7 +106,7 @@ upload_assets() {
     local expected_digest
     local remote_digest
     expected_digest="sha256:$(shasum -a 256 "${release_dist_dir}/${asset_name}" | awk '{print $1}')"
-    remote_digest="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" \
+    remote_digest="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
       --jq ".assets[] | select(.name == \"${asset_name}\") | .digest")"
     if [[ "${remote_digest}" != "${expected_digest}" ]]; then
       print -u2 -- "Remote digest for ${asset_name} does not match the local asset"
@@ -114,7 +121,7 @@ publish_release() {
   validate_asset_inventory false
   gh release edit "${RELEASE_TAG}" --draft=false --latest \
     --repo "${GITHUB_REPOSITORY}"
-  if [[ "$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .draft)" != false ]]; then
+  if [[ "$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" --jq .draft)" != false ]]; then
     print -u2 -- "Release ${RELEASE_TAG} remained a draft"
     exit 1
   fi
