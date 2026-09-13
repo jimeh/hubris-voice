@@ -36,5 +36,11 @@ a Swift package. Use mise as the only project task runner and tool manager.
 - Realtime diagnostics are sanitized before they reach
   `~/Library/Logs/HubrisVoice/realtime.log`; inspect them with `mise run logs`.
 
+Wire behavior of the OpenAI Realtime transcription API, including what has
+been observed live versus assumed, lives in
+[docs/reference/realtime-transcription.md](docs/reference/realtime-transcription.md).
+Read it before changing protocol handling or the dictation state machine, and
+update it when a live run contradicts it.
+
 Product scope, architecture, and manual test coverage live in [PLAN.md](PLAN.md).
 User setup and signing instructions live in [README.md](README.md).
