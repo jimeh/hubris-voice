@@ -375,6 +375,15 @@ final class AppModel: ObservableObject {
     isRefreshingLoginItemStatus = false
   }
 
+  func reconnect() {
+    apply(.connectRequested(force: true))
+  }
+
+  func openDiagnosticLog() {
+    let url = URL(fileURLWithPath: (DiagnosticLog.displayPath as NSString).expandingTildeInPath)
+    NSWorkspace.shared.activateFileViewerSelecting([url])
+  }
+
   func copyResult() {
     guard let presentation = session.presentation, presentation.canCopy else { return }
     insertionService.copy(presentation.transcript)

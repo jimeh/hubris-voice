@@ -2,282 +2,112 @@ import AppKit
 import HubrisVoiceCore
 import SwiftUI
 
+enum SettingsTab: String, CaseIterable {
+  case general, dictation, dictionary, shortcuts, permissions, history, advanced
+
+  var title: String {
+    switch self {
+    case .general: "General"
+    case .dictation: "Dictation"
+    case .dictionary: "Dictionary"
+    case .shortcuts: "Shortcuts"
+    case .permissions: "Permissions"
+    case .history: "History"
+    case .advanced: "Advanced"
+    }
+  }
+
+  var systemImage: String {
+    switch self {
+    case .general: "gearshape"
+    case .dictation: "waveform"
+    case .dictionary: "character.book.closed"
+    case .shortcuts: "keyboard"
+    case .permissions: "checkmark.shield"
+    case .history: "clock.arrow.circlepath"
+    case .advanced: "slider.horizontal.3"
+    }
+  }
+}
+
 struct SettingsView: View {
   @ObservedObject var model: AppModel
+  @State private var selectedTab = SettingsTab.general
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 24) {
-        statusHeader
-        shortcutSection
-        insertionSection
-        credentialsSection
-        dictionarySection
-        promptSection
-        permissionsSection
-      }
-      .padding(28)
-    }
-    .frame(width: 560, height: 650)
-    .background(Color(nsColor: .windowBackgroundColor))
-    .onAppear {
-      model.startPermissionPolling()
-    }
-    .onDisappear {
-      model.stopPermissionPolling()
-    }
-  }
-
-  private var insertionSection: some View {
-    settingSection(title: "Insertion") {
-      VStack(alignment: .leading, spacing: 12) {
-        Toggle("Smart leading space", isOn: $model.smartLeadingSpace)
-        Toggle("Trailing space", isOn: $model.trailingSpace)
-        Toggle("Adjust case after commas", isOn: $model.adjustCaseAfterComma)
+    TabView(selection: $selectedTab) {
+      ForEach(SettingsTab.allCases, id: \.self) { tab in
+        tabContent(tab)
+          .tabItem { Label(tab.title, systemImage: tab.systemImage) }
+          .tag(tab)
       }
     }
+    .frame(width: 640, height: 560)
+    .onAppear { model.startPermissionPolling() }
+    .onDisappear { model.stopPermissionPolling() }
   }
 
-  private var statusHeader: some View {
-    HStack(spacing: 12) {
-      ZStack {
-        Circle()
-          .fill(model.statusColor.opacity(0.14))
-          .frame(width: 42, height: 42)
-        Image(systemName: model.menuSystemImage)
-          .font(.system(size: 19, weight: .semibold))
-          .foregroundStyle(model.statusColor)
-      }
-      VStack(alignment: .leading, spacing: 2) {
-        Text("Hubris Voice")
-          .font(.system(size: 21, weight: .bold, design: .rounded))
-        Text(model.phaseTitle)
-          .foregroundStyle(.secondary)
-      }
-      Spacer()
-      Circle()
-        .fill(model.statusColor)
-        .frame(width: 9, height: 9)
+  @ViewBuilder
+  private func tabContent(_ tab: SettingsTab) -> some View {
+    switch tab {
+    case .general: GeneralSettingsTab(model: model)
+    case .dictation: DictationSettingsTab(model: model)
+    case .dictionary: DictionarySettingsTab(model: model)
+    case .shortcuts: ShortcutsSettingsTab(model: model)
+    case .permissions: PermissionsSettingsTab(model: model)
+    case .history: HistorySettingsTab()
+    case .advanced: AdvancedSettingsTab(model: model)
     }
   }
+}
 
-  private var shortcutSection: some View {
-    settingSection(title: "Push to talk") {
-      VStack(spacing: 12) {
-        HStack {
-          VStack(alignment: .leading, spacing: 4) {
-            Text("Global shortcut")
-            Text("Hold to record. Release to finalize and paste.")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
-          Spacer()
-          Text("⌃⇧Space")
-            .font(.system(.body, design: .monospaced, weight: .semibold))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Color.slate.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
-        }
-        Divider()
-        HStack {
-          Text("Overlay placement")
-          Spacer()
-          Picker("Overlay placement", selection: $model.overlayPlacement) {
-            Text("Automatic").tag(OverlayPlacementPreference.automatic)
-            Text("Bottom of screen").tag(OverlayPlacementPreference.bottomOfScreen)
-            Text("Top of screen").tag(OverlayPlacementPreference.topOfScreen)
-          }
-          .labelsHidden()
-          .frame(width: 180)
-        }
-      }
-    }
-  }
+/// A form row with a title, optional caption, and trailing control.
+struct SettingsRow<Control: View>: View {
+  let title: String
+  var caption: String?
+  @ViewBuilder let control: () -> Control
 
-  private var credentialsSection: some View {
-    settingSection(title: "OpenAI") {
-      VStack(alignment: .leading, spacing: 10) {
-        HStack {
-          SecureField("API key", text: $model.apiKeyDraft)
-            .textFieldStyle(.roundedBorder)
-          Picker(
-            "Language",
-            selection: Binding(
-              get: { model.languages.first ?? "en" },
-              set: { model.languages = [$0] }
-            )
-          ) {
-            Text("English").tag("en")
-          }
-          .labelsHidden()
-          .frame(width: 110)
-        }
-        HStack {
-          Text("Stored in your login Keychain. Audio is sent directly to OpenAI.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          Spacer()
-          Button("Save & reconnect") {
-            model.saveAPIKey()
-          }
-          .buttonStyle(.borderedProminent)
-        }
-        if let message = model.settingsMessage {
-          Text(message)
-            .font(.caption)
-            .foregroundStyle(
-              model.errorMessage == nil ? .secondary : Color.voiceCoral
-            )
-        }
-      }
-    }
-  }
-
-  private var dictionarySection: some View {
-    settingSection(title: "Custom dictionary") {
-      VStack(alignment: .leading, spacing: 12) {
-        if model.dictionaryWords.isEmpty {
-          Text("Add product names, people, acronyms, or phrases.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        } else {
-          LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 110), spacing: 8)],
-            alignment: .leading,
-            spacing: 8
-          ) {
-            ForEach(model.dictionaryWords, id: \.self) { word in
-              HStack(spacing: 6) {
-                Text(word)
-                  .font(.system(.caption, design: .monospaced))
-                  .lineLimit(1)
-                Spacer(minLength: 2)
-                Button {
-                  model.removeDictionaryWord(word)
-                } label: {
-                  Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Remove \(word)")
-              }
-              .padding(.horizontal, 9)
-              .padding(.vertical, 6)
-              .background(
-                Color.signalBlue.opacity(0.1),
-                in: RoundedRectangle(cornerRadius: 7)
-              )
-            }
-          }
-        }
-
-        HStack {
-          TextField(
-            "Add a word or phrase",
-            text: $model.newDictionaryWord
-          )
-          .textFieldStyle(.roundedBorder)
-          .onSubmit {
-            model.addDictionaryWord()
-          }
-          Button("Add") {
-            model.addDictionaryWord()
-          }
-          .disabled(
-            model.newDictionaryWord
-              .trimmingCharacters(in: .whitespacesAndNewlines)
-              .isEmpty
-          )
-        }
-      }
-    }
-  }
-
-  private var promptSection: some View {
-    settingSection(title: "Transcription context") {
-      TextEditor(text: $model.prompt)
-        .font(.system(.body, design: .rounded))
-        .scrollContentBackground(.hidden)
-        .padding(8)
-        .frame(minHeight: 76)
-        .background(
-          Color(nsColor: .textBackgroundColor),
-          in: RoundedRectangle(cornerRadius: 7)
-        )
-        .overlay {
-          RoundedRectangle(cornerRadius: 7)
-            .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-        }
-    }
-  }
-
-  private var permissionsSection: some View {
-    settingSection(title: "Permissions") {
-      VStack(spacing: 12) {
-        permissionRow(
-          title: "Microphone",
-          status: model.microphonePermission.label,
-          allowed: model.microphonePermission == .authorized,
-          buttonTitle: model.microphonePermission == .authorized
-            ? nil
-            : "Request"
-        ) {
-          model.requestMicrophonePermission()
-        }
-        Divider()
-        permissionRow(
-          title: "Accessibility",
-          status: model.accessibilityTrusted ? "Allowed" : "Required",
-          allowed: model.accessibilityTrusted,
-          buttonTitle: model.accessibilityTrusted ? nil : "Request"
-        ) {
-          model.requestAccessibilityPermission()
-        }
-      }
-    }
-  }
-
-  private func permissionRow(
-    title: String,
-    status: String,
-    allowed: Bool,
-    buttonTitle: String?,
-    action: @escaping () -> Void
-  ) -> some View {
-    HStack {
+  var body: some View {
+    HStack(alignment: .center, spacing: 12) {
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
-        Text(
-          title == "Microphone"
-            ? "Capture speech while the shortcut is held."
-            : "Observe the shortcut and paste into the focused app."
-        )
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        if let caption {
+          Text(caption)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
       }
-      Spacer()
-      Label(
-        status,
-        systemImage: allowed ? "checkmark.circle.fill" : "circle.dashed"
-      )
+      Spacer(minLength: 16)
+      control()
+    }
+  }
+}
+
+struct StatusBadge: View {
+  enum Tone { case positive, attention, neutral }
+
+  let text: String
+  let tone: Tone
+
+  var body: some View {
+    Label(text, systemImage: symbol)
       .font(.caption)
-      .foregroundStyle(allowed ? Color.completionMint : .secondary)
-      if let buttonTitle {
-        Button(buttonTitle, action: action)
-      }
+      .foregroundStyle(color)
+  }
+
+  private var symbol: String {
+    switch tone {
+    case .positive: "checkmark.circle.fill"
+    case .attention: "exclamationmark.circle.fill"
+    case .neutral: "circle.dashed"
     }
   }
 
-  private func settingSection(
-    title: String,
-    @ViewBuilder content: () -> some View
-  ) -> some View {
-    VStack(alignment: .leading, spacing: 9) {
-      Text(title.uppercased())
-        .font(.system(size: 11, weight: .semibold))
-        .tracking(0.8)
-        .foregroundStyle(.secondary)
-      content()
+  private var color: Color {
+    switch tone {
+    case .positive: .completionMint
+    case .attention: .voiceCoral
+    case .neutral: .secondary
     }
   }
 }
