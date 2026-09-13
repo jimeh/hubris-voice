@@ -1244,7 +1244,7 @@ private extension ShortcutSet {
   }
 }
 
-extension UserDefaults: SettingsStore {
+extension UserDefaults: @unchecked Sendable, SettingsStore {
   public func string(_ key: String) -> String? {
     string(forKey: key)
   }

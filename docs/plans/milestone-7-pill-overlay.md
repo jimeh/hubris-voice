@@ -338,8 +338,8 @@ change does not justify building one.
   place text on the clipboard without an explicit user action.
 - `README.md`: rewrite the first paragraph to describe the pill, the line
   cap, insertion at the current focus, and the recovery shortcut.
-- `PLAN.md`: replace the focus-safe paste scope line and update the manual
-  test list.
+- `README.md` and the daily-driver plan: document insertion at transcript-time
+  focus and update the manual test list.
 - `2026-09-13-daily-driver.md`: add milestone 7 to the index and the status
   line.
 

@@ -47,13 +47,12 @@ final class OverlayPresentationTests: XCTestCase {
     let probe = CompletionProbe()
 
     await scheduler.schedule(after: .milliseconds(10)) {
-      Task {
-        await probe.markCompleted()
-      }
+      probe.markCompleted()
     }
 
-    try? await Task.sleep(for: .milliseconds(40))
-    let didComplete = await probe.isCompleted
+    let didCompleteImmediately = await probe.isCompleted
+    XCTAssertFalse(didCompleteImmediately)
+    let didComplete = await waitUntilCompleted(probe)
     XCTAssertTrue(didComplete)
   }
 
@@ -62,13 +61,11 @@ final class OverlayPresentationTests: XCTestCase {
     let probe = CompletionProbe()
 
     await scheduler.schedule(after: .milliseconds(10)) {
-      Task {
-        await probe.markCompleted()
-      }
+      probe.markCompleted()
     }
     await scheduler.cancel()
 
-    try? await Task.sleep(for: .milliseconds(40))
+    try? await Task.sleep(for: .milliseconds(100))
     let didComplete = await probe.isCompleted
     XCTAssertFalse(didComplete)
   }
@@ -79,25 +76,37 @@ final class OverlayPresentationTests: XCTestCase {
     let replacementProbe = CompletionProbe()
 
     await scheduler.schedule(after: .milliseconds(40)) {
-      Task {
-        await firstProbe.markCompleted()
-      }
+      firstProbe.markCompleted()
     }
     await scheduler.schedule(after: .milliseconds(10)) {
-      Task {
-        await replacementProbe.markCompleted()
-      }
+      replacementProbe.markCompleted()
     }
 
-    try? await Task.sleep(for: .milliseconds(70))
+    let replacementDidComplete = await waitUntilCompleted(replacementProbe)
+    try? await Task.sleep(for: .milliseconds(80))
     let firstDidComplete = await firstProbe.isCompleted
-    let replacementDidComplete = await replacementProbe.isCompleted
     XCTAssertFalse(firstDidComplete)
     XCTAssertTrue(replacementDidComplete)
   }
 }
 
-private actor CompletionProbe {
+private func waitUntilCompleted(
+  _ probe: CompletionProbe,
+  timeout: Duration = .seconds(1)
+) async -> Bool {
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: timeout)
+  while clock.now < deadline {
+    if await probe.isCompleted {
+      return true
+    }
+    try? await Task.sleep(for: .milliseconds(10))
+  }
+  return await probe.isCompleted
+}
+
+@MainActor
+private final class CompletionProbe {
   private(set) var isCompleted = false
 
   func markCompleted() {

@@ -2,12 +2,12 @@
 
 Status: all seven milestones implemented on 2026-09-13; milestone 7 was added
 after reviewing the overlay in use. Each milestone has its own brief in this
-directory. Manual verification with
-the user present is still open for the items listed under each milestone. Originally drafted 2026-09-13 and revised
-after an independent review. Builds on
-[PLAN.md](../../PLAN.md), which stays the product and architecture reference.
-This document covers the work needed to move Hubris Voice from a working proof
-of concept to a dictation app used many times a day.
+directory. Manual verification with the user present is still open for the
+items listed under each milestone. Originally drafted 2026-09-13 and revised
+after an independent review. The current product scope lives in
+[README.md](../../README.md). This document records the architecture boundaries,
+verification coverage, and work that moved Hubris Voice from a working proof of
+concept to a dictation app used many times a day.
 
 ## Goals
 
@@ -310,11 +310,10 @@ in `HubrisVoiceApp`.
 - Core additions are unit tested in `HubrisVoiceCoreTests`. Transport and
   coordinator races use a fake transport and fake clock rather than live
   sessions.
-- Manual verification with the user present for each milestone, extending
-  the checklist in [PLAN.md](../../PLAN.md): reconnect after sleep and after a
-  forced socket close, overlay placement in a native field, an Electron
-  composer, a terminal, and a full-screen app, direct insertion into TextEdit
-  and Safari, Electron fallback, secure-field rejection, a caret move during
+- Manual verification with the user present for each milestone: reconnect after
+  sleep and after a forced socket close, overlay placement in a native field,
+  an Electron composer, a terminal, and a full-screen app, direct insertion
+  into TextEdit and Safari, Electron fallback, secure-field rejection, a caret move
   the confirmation window, clipboard overlap with a user copy, Fn
   push-to-talk, both Command keys held, tap-to-lock, device switching, login
   item approval and revocation, and the paste-last-transcript binding.

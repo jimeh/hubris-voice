@@ -6,10 +6,15 @@ lockfile = true
 minimum_release_age = "7d"
 
 [tools]
+actionlint = "latest"
 lefthook = "latest"
+pinact = "latest"
+ripgrep = "latest"
 swiftformat = "latest"
 swiftlint = "latest"
 taplo = "latest"
+zizmor = "latest"
+"github:jimeh/treeboot" = "0"
 
 [tasks.setup]
 description = "Install pinned tools and repository Git hooks"
@@ -18,6 +23,10 @@ run = ["mise install --locked", "lefthook install"]
 [tasks.doctor]
 description = "Check the macOS, Xcode, signing, tool, and hook setup"
 run = "./Scripts/doctor.sh"
+
+[tasks.treeboot]
+description = "Bootstrap the current linked worktree"
+run = "treeboot run"
 
 [tasks.dev]
 description = "Build, sign, and launch the development app"
@@ -36,6 +45,14 @@ run = "./Scripts/bundle.sh release"
 description = "Build and strictly verify the signed release app bundle"
 run = [
   "./Scripts/bundle.sh release",
+  "plutil -lint '.build/artifacts/Hubris Voice.app/Contents/Info.plist'",
+  "codesign --verify --deep --strict --verbose=2 '.build/artifacts/Hubris Voice.app'",
+]
+
+[tasks."bundle:verify:adhoc"]
+description = "Build and verify an ad-hoc signed release app bundle for CI"
+run = [
+  "./Scripts/bundle.sh release adhoc",
   "plutil -lint '.build/artifacts/Hubris Voice.app/Contents/Info.plist'",
   "codesign --verify --deep --strict --verbose=2 '.build/artifacts/Hubris Voice.app'",
 ]
@@ -59,18 +76,37 @@ run = "swiftlint lint --strict"
 description = "Parse all repository zsh scripts"
 run = "zsh -n Scripts/*.sh Tests/*.sh"
 
+[tasks."lint:architecture"]
+description = "Enforce the HubrisVoiceCore system-framework boundary"
+run = "./Scripts/lint-architecture.sh"
+
+[tasks."lint:workflows"]
+description = "Validate GitHub Actions syntax, security, and SHA pins"
+run = [
+  "actionlint",
+  "zizmor --offline .github/workflows",
+  "pinact run -fix=false -no-api",
+]
+
 [tasks."lint:config"]
 description = "Validate task, hook, TOML, and bundle metadata configuration"
 run = [
   "mise tasks validate",
   "lefthook validate",
+  "treeboot check",
   "taplo lint mise.toml",
   "plutil -lint Support/Info.plist",
 ]
 
 [tasks.lint]
 description = "Run all static checks"
-depends = ["lint:swift", "lint:shell", "lint:config"]
+depends = [
+  "lint:swift",
+  "lint:shell",
+  "lint:config",
+  "lint:architecture",
+  "lint:workflows",
+]
 
 [tasks."lint:fix"]
 description = "Apply safe SwiftLint corrections, then format"

@@ -120,15 +120,19 @@ Lefthook runs fast staged-file formatters and linters before each commit. The
 hook is installed by `mise run setup` and can be reinstalled with
 `mise run hooks:install`.
 
+Linked worktrees can run `mise run treeboot` to copy the main checkout's ignored
+`mise.local.toml` once and then run `mise run setup`. Existing worktree-local
+copies are preserved.
+
 The project toolchain is recorded in `mise.toml` and resolved versions and
 artifact checksums are committed in `mise.lock`. `mise run tools:update`
 updates tools that have cleared the seven-day release cooldown, refreshes the
 lockfile, and runs the normal project checks.
 
-See [PLAN.md](PLAN.md) for product decisions, architecture, visual direction,
-test strategy, and deferred questions, and
+See
 [docs/plans/2026-09-13-daily-driver.md](docs/plans/2026-09-13-daily-driver.md)
-for the milestone briefs behind the current feature set.
+for architecture boundaries, remaining manual test coverage, and the milestone
+briefs behind the current feature set.
 
 ## Development insertion trace
 
