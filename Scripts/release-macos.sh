@@ -160,8 +160,8 @@ prepare_app() {
   cp "${repo_dir}/third-party/sparkle/LICENSE" \
     "${stage_app}/Contents/Resources/Sparkle-LICENSE"
 
-  lipo -verify_arch arm64 "${stage_app}/Contents/MacOS/HubrisVoice"
-  lipo -verify_arch x86_64 "${stage_app}/Contents/MacOS/HubrisVoice"
+  lipo "${stage_app}/Contents/MacOS/HubrisVoice" -verify_arch arm64
+  lipo "${stage_app}/Contents/MacOS/HubrisVoice" -verify_arch x86_64
   if ! otool -L "${stage_app}/Contents/MacOS/HubrisVoice" |
     rg -q '@rpath/Sparkle.framework/Versions/B/Sparkle'
   then
