@@ -23,13 +23,24 @@ final class DictationSettingsTests: XCTestCase {
           GlobalShortcut(keyCode: 8, modifiers: [.control, .option])
         )
       ),
-      tapToLock: true
+      tapToLock: true,
+      history: HistorySettings(persist: true),
+      sounds: SoundCueSettings(startStop: true, pasted: true, rejected: true)
     )
     let store = MemorySettingsStore()
 
     expected.save(to: store)
 
     XCTAssertEqual(DictationSettings.load(from: store), expected)
+  }
+
+  func testDictationEnabledAlwaysResetsAtLaunch() {
+    let settings = DictationSettings(dictationEnabled: false)
+    let store = MemorySettingsStore()
+
+    settings.save(to: store)
+
+    XCTAssertTrue(DictationSettings.load(from: store).dictationEnabled)
   }
 
   func testInvalidShortcutJSONFallsBackToDefault() {

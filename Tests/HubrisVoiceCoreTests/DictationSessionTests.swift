@@ -197,6 +197,7 @@ final class DictationSessionTests: XCTestCase {
       [
         .cancelFinalizingTimeout(generation: 0),
         .clearAudio(generation: 0),
+        .recordTranscript(generation: 0, text: "text"),
         .insert(generation: 0, text: "text"),
       ]
     )
@@ -214,9 +215,45 @@ final class DictationSessionTests: XCTestCase {
       [
         .cancelFinalizingTimeout(generation: 0),
         .clearAudio(generation: 0),
+        .recordTranscript(generation: 0, text: "hello"),
         .insert(generation: 0, text: "hello"),
       ]
     )
+  }
+
+  func testCompletedTranscriptRecordsBeforeInsertion() {
+    var session = readySession()
+    _ = makePending(in: &session, itemID: "item")
+
+    let effects = session.transition(
+      .server(.transcriptCompleted(itemID: "item", transcript: "hello"))
+    )
+
+    XCTAssertEqual(
+      effects,
+      [
+        .cancelFinalizingTimeout(generation: 0),
+        .clearAudio(generation: 0),
+        .recordTranscript(generation: 0, text: "hello"),
+        .insert(generation: 0, text: "hello"),
+      ]
+    )
+  }
+
+  func testEmptyCompletedTranscriptIsNotRecorded() {
+    var session = readySession()
+    _ = makePending(in: &session, itemID: "item")
+
+    let effects = session.transition(
+      .server(.transcriptCompleted(itemID: "item", transcript: "  \n"))
+    )
+
+    XCTAssertFalse(effects.contains { effect in
+      if case .recordTranscript = effect {
+        return true
+      }
+      return false
+    })
   }
 
   func testTwoPendingSnippetsCompleteOutOfOrderWithIndependentText() {

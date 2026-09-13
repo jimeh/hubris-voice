@@ -114,6 +114,7 @@ public struct DictationSession: Equatable, Sendable {
     case cancelReconnect
     case scheduleFinalizingTimeout(generation: Int, after: Duration)
     case cancelFinalizingTimeout(generation: Int)
+    case recordTranscript(generation: Int, text: String)
     case insert(generation: Int, text: String)
     case insertAtCurrentFocus(generation: Int, text: String)
     case scheduleDismiss(after: Duration)
@@ -560,6 +561,7 @@ private extension DictationSession {
     return [
       .cancelFinalizingTimeout(generation: snippet.generation),
       .clearAudio(generation: snippet.generation),
+      .recordTranscript(generation: snippet.generation, text: text),
       .insert(generation: snippet.generation, text: text),
     ]
   }

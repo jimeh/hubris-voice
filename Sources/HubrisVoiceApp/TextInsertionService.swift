@@ -5,6 +5,7 @@ import HubrisVoiceCore
 
 struct CapturedFocus {
   let snapshot: FocusSnapshot
+  let targetBundleID: String?
   let applicationElement: AXUIElement
   let element: AXUIElement?
 }
@@ -54,6 +55,7 @@ final class TextInsertionService {
         },
         isSecure: focusedElement.map(isSecure) ?? false
       ),
+      targetBundleID: application.bundleIdentifier,
       applicationElement: applicationElement,
       element: focusedElement
     )

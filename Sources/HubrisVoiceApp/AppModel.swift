@@ -17,6 +17,7 @@ final class AppModel: ObservableObject {
   }
 
   @Published private(set) var phaseTitle: String
+  @Published private(set) var history: TranscriptHistory
   @Published var apiKeyDraft: String
   @Published var languages: [String] {
     didSet {
@@ -112,14 +113,72 @@ final class AppModel: ObservableObject {
     }
   }
 
+  @Published var dictationEnabled: Bool {
+    didSet {
+      guard dictationEnabled != oldValue else { return }
+      updateSettings { $0.dictationEnabled = dictationEnabled }
+      if !dictationEnabled, session.listening != nil {
+        apply(.cancelRequested)
+      }
+    }
+  }
+
+  @Published var historyPersistenceEnabled: Bool {
+    didSet {
+      guard historyPersistenceEnabled != oldValue else { return }
+      updateSettings { $0.history.persist = historyPersistenceEnabled }
+      if historyPersistenceEnabled {
+        scheduleHistoryPersistence()
+      } else {
+        historyPersistenceScheduler.cancel()
+        deletePersistedHistory()
+      }
+    }
+  }
+
+  @Published var startStopSoundsEnabled: Bool {
+    didSet {
+      guard startStopSoundsEnabled != oldValue else { return }
+      updateSettings { $0.sounds.startStop = startStopSoundsEnabled }
+    }
+  }
+
+  @Published var pastedSoundEnabled: Bool {
+    didSet {
+      guard pastedSoundEnabled != oldValue else { return }
+      updateSettings { $0.sounds.pasted = pastedSoundEnabled }
+    }
+  }
+
+  @Published var rejectedSoundEnabled: Bool {
+    didSet {
+      guard rejectedSoundEnabled != oldValue else { return }
+      updateSettings { $0.sounds.rejected = rejectedSoundEnabled }
+    }
+  }
+
   @Published private(set) var requiresApproval: Bool
   @Published private(set) var lastConfirmedAt: Date?
-  @Published private(set) var lastTranscript: String?
   @Published private(set) var shortcutConflict: String?
   @Published private(set) var lastAttentionAt: Date?
 
   let overlayModel = OverlayViewModel()
   weak var overlayController: OverlayController?
+
+  var lastTranscript: String? {
+    history.latest?.text
+  }
+
+  var connectionSummary: String {
+    switch session.connection {
+    case .unconfigured:
+      "Add an API key"
+    case .connecting, .disconnected:
+      "Reconnecting…"
+    case .ready:
+      "Connected · \(dictionaryTermSummary) · \(languageSummary)"
+    }
+  }
 
   var menuSystemImage: String {
     if lastAttentionAt != nil {
@@ -164,12 +223,15 @@ final class AppModel: ObservableObject {
   private let audioCapture = AudioCapture()
   private let shortcutMonitor = ShortcutMonitor()
   private let insertionService = TextInsertionService()
+  private let soundCues = SoundCues()
   private let keychain = KeychainStore()
   private let loginItemService = LoginItemService()
   private let defaults: UserDefaults
   private let reconnectScheduler = DelayedActionScheduler()
   private let dismissScheduler = DelayedActionScheduler()
   private let configurationScheduler = DelayedActionScheduler()
+  private let historyPersistenceScheduler = DelayedActionScheduler()
+  private let historyStore: TranscriptHistoryStore
   private let networkMonitor = NWPathMonitor()
   private let networkQueue = DispatchQueue(label: "com.jimeh.HubrisVoice.network")
 
@@ -197,9 +259,14 @@ final class AppModel: ObservableObject {
   private var isRefreshingLoginItemStatus = false
   private var didWarnForFnBinding = false
   private var pasteLastInsertionGenerations: Set<Int> = []
+  private var historyEntryIDs: [Int: UUID] = [:]
+  private var presentedHistoryEntryID: UUID?
 
+  // swiftlint:disable:next function_body_length
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
+    let historyStore = TranscriptHistoryStore()
+    self.historyStore = historyStore
     let storedAPIKey = (try? keychain.readAPIKey()) ?? ""
     let loginItemStatus = LoginItemService().status
     var settings = DictationSettings.load(from: defaults)
@@ -207,6 +274,9 @@ final class AppModel: ObservableObject {
       settings.launchAtLogin = true
     }
     self.settings = settings
+    history = settings.history.persist
+      ? (try? historyStore.load()) ?? TranscriptHistory()
+      : TranscriptHistory()
     savedAPIKey = storedAPIKey
     apiKeyDraft = storedAPIKey
     languages = settings.languages
@@ -224,9 +294,13 @@ final class AppModel: ObservableObject {
     launchAtLogin = loginItemStatus == .enabled
     shortcuts = settings.shortcuts
     tapToLock = settings.tapToLock
+    dictationEnabled = true
+    historyPersistenceEnabled = settings.history.persist
+    startStopSoundsEnabled = settings.sounds.startStop
+    pastedSoundEnabled = settings.sounds.pasted
+    rejectedSoundEnabled = settings.sounds.rejected
     requiresApproval = loginItemStatus == .requiresApproval
     lastConfirmedAt = nil
-    lastTranscript = nil
     shortcutConflict = Self.conflictMessage(for: settings.shortcuts)
     lastAttentionAt = nil
     session = DictationSession(
@@ -412,6 +486,31 @@ final class AppModel: ObservableObject {
     NSWorkspace.shared.activateFileViewerSelecting([url])
   }
 
+  func toggleDictation() {
+    dictationEnabled.toggle()
+  }
+
+  func copyTranscript(_ entry: TranscriptEntry) {
+    insertionService.copy(entry.text)
+    updateHistory(id: entry.id, outcome: .copied)
+  }
+
+  func removeHistoryEntry(id entryID: UUID) {
+    history.remove(id: entryID)
+    historyEntryIDs = historyEntryIDs.filter { $0.value != entryID }
+    if presentedHistoryEntryID == entryID {
+      presentedHistoryEntryID = nil
+    }
+    historyDidChange()
+  }
+
+  func clearHistory() {
+    history.clear()
+    historyEntryIDs.removeAll()
+    presentedHistoryEntryID = nil
+    historyDidChange()
+  }
+
   func copyResult() {
     guard let presentation = session.presentation, presentation.canCopy else { return }
     insertionService.copy(presentation.transcript)
@@ -500,7 +599,146 @@ final class AppModel: ObservableObject {
     sendConfigurationUpdateWhenIdle()
   }
 
+  // swiftlint:disable:next cyclomatic_complexity
+  private func prepareHistory(
+    for event: DictationSession.Event
+  ) -> UUID? {
+    switch event {
+    case .insertionFinished(let generation, let outcome, _):
+      guard
+        session.inserting.contains(where: { $0.generation == generation }),
+        let entryID = historyEntryIDs.removeValue(forKey: generation)
+      else {
+        return nil
+      }
+      updateHistory(id: entryID, outcome: outcome.historyOutcome)
+      presentedHistoryEntryID = outcome == .confirmed ? nil : entryID
+    case .finalizingTimedOut(let generation):
+      guard
+        let snippet = session.pending.first(where: { $0.generation == generation }),
+        !snippet.transcript.isEmpty
+      else {
+        return nil
+      }
+      let entryID = recordTranscript(
+        generation: generation,
+        text: snippet.transcript,
+        outcome: .timedOut
+      )
+      presentedHistoryEntryID = entryID
+    case .copied:
+      if let presentedHistoryEntryID {
+        updateHistory(id: presentedHistoryEntryID, outcome: .copied)
+      }
+    case .cancelRequested:
+      if let listening = session.listening {
+        recordCancelledTranscript(listening)
+      } else if session.presented != nil {
+        presentedHistoryEntryID = nil
+      } else {
+        for snippet in session.pending where !snippet.transcript.isEmpty {
+          recordCancelledTranscript(snippet)
+        }
+      }
+    case .localError:
+      if let listening = session.listening {
+        presentedHistoryEntryID = recordCancelledTranscript(listening)
+      }
+    case .server(.error):
+      if let listening = session.listening {
+        presentedHistoryEntryID = recordCancelledTranscript(listening)
+      }
+    case .dismissRequested, .dismissDelayElapsed:
+      presentedHistoryEntryID = nil
+    case .pasteHereRequested:
+      return presentedHistoryEntryID
+    case .pasteLastRequested(let text):
+      return history.latest?.text == text ? history.latest?.id : nil
+    default:
+      break
+    }
+    return nil
+  }
+
+  @discardableResult
+  private func recordTranscript(
+    generation: Int,
+    text: String,
+    outcome: TranscriptEntry.Outcome
+  ) -> UUID? {
+    guard !text.isEmpty else { return nil }
+    if let entryID = historyEntryIDs[generation] {
+      updateHistory(id: entryID, outcome: outcome)
+      return entryID
+    }
+    let entry = TranscriptEntry(
+      text: text,
+      targetBundleID: focus[generation]?.targetBundleID,
+      outcome: outcome
+    )
+    history.record(entry)
+    historyEntryIDs[generation] = entry.id
+    historyDidChange()
+    return entry.id
+  }
+
+  @discardableResult
+  private func recordCancelledTranscript(
+    _ snippet: DictationSession.Snippet
+  ) -> UUID? {
+    guard !snippet.transcript.isEmpty else { return nil }
+    return recordTranscript(
+      generation: snippet.generation,
+      text: snippet.transcript,
+      outcome: .cancelled
+    )
+  }
+
+  private func updateHistory(
+    id entryID: UUID,
+    outcome: TranscriptEntry.Outcome
+  ) {
+    history.update(id: entryID, outcome: outcome)
+    historyDidChange()
+  }
+
+  private func historyDidChange() {
+    guard historyPersistenceEnabled else { return }
+    let snapshot = history
+    historyPersistenceScheduler.schedule(after: .seconds(1)) { [historyStore] in
+      do {
+        try historyStore.save(snapshot)
+      } catch {
+        Task {
+          await DiagnosticLog.shared.record(
+            "history persistence failed \(RealtimeDiagnosticFormatter.errorSummary(error))",
+            level: .error
+          )
+        }
+      }
+    }
+  }
+
+  private func scheduleHistoryPersistence() {
+    historyDidChange()
+  }
+
+  private func deletePersistedHistory() {
+    do {
+      try historyStore.delete()
+    } catch {
+      Task {
+        await DiagnosticLog.shared.record(
+          "history deletion failed \(RealtimeDiagnosticFormatter.errorSummary(error))",
+          level: .error
+        )
+      }
+    }
+  }
+
   private func apply(_ event: DictationSession.Event) {
+    let insertionGeneration = session.nextGeneration
+    let historyEntryForNewInsertion = prepareHistory(for: event)
     let rejectedPasteLastText: String? =
       if case .insertionFinished(let generation, .rejected, _) = event,
       pasteLastInsertionGenerations.contains(generation) {
@@ -527,6 +765,13 @@ final class AppModel: ObservableObject {
       releasedAt[generation] = Date()
     }
     let effects = session.transition(event)
+    if
+      let historyEntryForNewInsertion,
+      session.inserting.contains(where: { $0.generation == insertionGeneration })
+    {
+      historyEntryIDs[insertionGeneration] = historyEntryForNewInsertion
+      presentedHistoryEntryID = nil
+    }
     for effect in effects {
       interpret(effect)
     }
@@ -540,6 +785,7 @@ final class AppModel: ObservableObject {
       if insertionTelemetry.outcome == .confirmed {
         flashConfirmed()
       }
+      playInsertionSound(for: insertionTelemetry.outcome)
       if let releasedAt = insertionTelemetry.releasedAt {
         let latency = max(0, Int(Date().timeIntervalSince(releasedAt) * 1_000))
         Task {
@@ -557,8 +803,16 @@ final class AppModel: ObservableObject {
   // swiftlint:disable:next cyclomatic_complexity
   private func interpret(_ effect: DictationSession.Effect) {
     switch effect {
-    case .startCapture(let generation): startCapture(generation: generation)
-    case .stopCapture: stopCaptureAfterGrace()
+    case .startCapture(let generation):
+      if startStopSoundsEnabled {
+        soundCues.playStart()
+      }
+      startCapture(generation: generation)
+    case .stopCapture:
+      if startStopSoundsEnabled {
+        soundCues.playStop()
+      }
+      stopCaptureAfterGrace()
     case .replayAudio(let generation): client.outbound.replay(buffers[generation]?.chunks ?? [])
     case .commitAudio: client.outbound.commitAudio()
     case .clearAudio(let generation):
@@ -575,6 +829,8 @@ final class AppModel: ObservableObject {
     case .scheduleFinalizingTimeout(let generation, let delay):
       scheduleFinalizingTimeout(generation: generation, delay: delay)
     case .cancelFinalizingTimeout(let generation): cancelFinalizingTimeout(generation: generation)
+    case .recordTranscript(let generation, let text):
+      recordTranscript(generation: generation, text: text, outcome: .attempted)
     case .insert(let generation, let text): insert(generation: generation, text: text)
     case .insertAtCurrentFocus(let generation, let text):
       releasedAt[generation] = Date()
@@ -627,7 +883,7 @@ final class AppModel: ObservableObject {
     role: ShortcutRole,
     action: ShortcutGesture.Action
   ) {
-    guard !isRecordingShortcut else { return }
+    guard !isRecordingShortcut, dictationEnabled else { return }
     switch (role, action) {
     case (.pushToTalk, .pressed):
       handlePress()
@@ -696,9 +952,6 @@ final class AppModel: ObservableObject {
   }
 
   private func handle(_ event: RealtimeTransportEvent) {
-    if case .server(.transcriptCompleted(_, let transcript)) = event {
-      lastTranscript = transcript
-    }
     switch event {
     case .server(.sessionReady):
       pendingConfigurationAcks = max(
@@ -799,6 +1052,7 @@ final class AppModel: ObservableObject {
     buffers.removeValue(forKey: generation)
     focus.removeValue(forKey: generation)
     releasedAt.removeValue(forKey: generation)
+    historyEntryIDs.removeValue(forKey: generation)
     cancelFinalizingTimeout(generation: generation)
   }
 
@@ -847,6 +1101,32 @@ final class AppModel: ObservableObject {
       adjustCaseAfterComma: adjustCaseAfterComma,
       protectedTerms: dictionaryWords
     )
+  }
+
+  private var dictionaryTermSummary: String {
+    let count = dictionaryWords.count
+    return "\(count) dictionary term\(count == 1 ? "" : "s")"
+  }
+
+  private var languageSummary: String {
+    let names = languages.compactMap { code in
+      RealtimeSessionConfiguration.supportedLanguages.first {
+        $0.code == code
+      }?.name
+    }
+    return names.isEmpty ? "Auto language" : names.joined(separator: ", ")
+  }
+
+  private func playInsertionSound(for outcome: PasteOutcome) {
+    switch outcome {
+    case .confirmed where pastedSoundEnabled:
+      soundCues.playPasted()
+    case .attempted where rejectedSoundEnabled,
+         .rejected where rejectedSoundEnabled:
+      soundCues.playRejected()
+    default:
+      break
+    }
   }
 
   private func enqueueConnect() {
@@ -977,6 +1257,14 @@ extension UserDefaults: SettingsStore {
 }
 
 private extension PasteOutcome {
+  var historyOutcome: TranscriptEntry.Outcome {
+    switch self {
+    case .confirmed: .pasted
+    case .attempted: .attempted
+    case .rejected: .rejected
+    }
+  }
+
   var diagnosticName: String {
     switch self {
     case .confirmed: "confirmed"

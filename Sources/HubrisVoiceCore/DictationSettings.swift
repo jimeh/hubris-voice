@@ -7,6 +7,30 @@ public protocol SettingsStore: AnyObject, Sendable {
   func set(_ value: Any?, for key: String)
 }
 
+public struct HistorySettings: Equatable, Sendable {
+  public var persist: Bool
+
+  public init(persist: Bool = false) {
+    self.persist = persist
+  }
+}
+
+public struct SoundCueSettings: Equatable, Sendable {
+  public var startStop: Bool
+  public var pasted: Bool
+  public var rejected: Bool
+
+  public init(
+    startStop: Bool = false,
+    pasted: Bool = false,
+    rejected: Bool = false
+  ) {
+    self.startStop = startStop
+    self.pasted = pasted
+    self.rejected = rejected
+  }
+}
+
 public struct DictationSettings: Equatable, Sendable {
   public enum Key {
     public static let language = "transcription.language"
@@ -20,6 +44,10 @@ public struct DictationSettings: Equatable, Sendable {
     public static let launchAtLogin = "app.launchAtLogin"
     public static let shortcuts = "shortcuts.bindings"
     public static let tapToLock = "shortcuts.tapToLock"
+    public static let historyPersist = "history.persist"
+    public static let soundsStartStop = "sounds.startStop"
+    public static let soundsPasted = "sounds.pasted"
+    public static let soundsRejected = "sounds.rejected"
   }
 
   public static let defaultPrompt =
@@ -36,6 +64,9 @@ public struct DictationSettings: Equatable, Sendable {
   public var launchAtLogin: Bool
   public var shortcuts: ShortcutSet
   public var tapToLock: Bool
+  public var dictationEnabled: Bool
+  public var history: HistorySettings
+  public var sounds: SoundCueSettings
 
   public init(
     languages: [String] = ["en"],
@@ -48,7 +79,10 @@ public struct DictationSettings: Equatable, Sendable {
     inputDeviceUID: String? = nil,
     launchAtLogin: Bool = false,
     shortcuts: ShortcutSet = .init(),
-    tapToLock: Bool = false
+    tapToLock: Bool = false,
+    dictationEnabled: Bool = true,
+    history: HistorySettings = .init(),
+    sounds: SoundCueSettings = .init()
   ) {
     self.languages = languages
     self.prompt = prompt
@@ -61,6 +95,9 @@ public struct DictationSettings: Equatable, Sendable {
     self.launchAtLogin = launchAtLogin
     self.shortcuts = shortcuts
     self.tapToLock = tapToLock
+    self.dictationEnabled = dictationEnabled
+    self.history = history
+    self.sounds = sounds
   }
 
   public static func load(from store: SettingsStore) -> DictationSettings {
@@ -83,7 +120,16 @@ public struct DictationSettings: Equatable, Sendable {
       inputDeviceUID: store.string(Key.inputDeviceUID),
       launchAtLogin: store.bool(Key.launchAtLogin) ?? false,
       shortcuts: shortcuts,
-      tapToLock: store.bool(Key.tapToLock) ?? false
+      tapToLock: store.bool(Key.tapToLock) ?? false,
+      dictationEnabled: true,
+      history: HistorySettings(
+        persist: store.bool(Key.historyPersist) ?? false
+      ),
+      sounds: SoundCueSettings(
+        startStop: store.bool(Key.soundsStartStop) ?? false,
+        pasted: store.bool(Key.soundsPasted) ?? false,
+        rejected: store.bool(Key.soundsRejected) ?? false
+      )
     )
   }
 
@@ -100,6 +146,10 @@ public struct DictationSettings: Equatable, Sendable {
     let encodedShortcuts = try? JSONEncoder().encode(shortcuts)
     store.set(encodedShortcuts.flatMap { String(data: $0, encoding: .utf8) }, for: Key.shortcuts)
     store.set(tapToLock, for: Key.tapToLock)
+    store.set(history.persist, for: Key.historyPersist)
+    store.set(sounds.startStop, for: Key.soundsStartStop)
+    store.set(sounds.pasted, for: Key.soundsPasted)
+    store.set(sounds.rejected, for: Key.soundsRejected)
   }
 
   public var sessionConfiguration: RealtimeSessionConfiguration {
