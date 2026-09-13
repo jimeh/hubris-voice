@@ -58,7 +58,10 @@ final class AppModel: ObservableObject {
   weak var overlayController: OverlayController?
 
   var menuSystemImage: String {
-    switch session.presentation?.mode {
+    if lastConfirmedAt != nil {
+      return "checkmark.circle"
+    }
+    return switch session.presentation?.mode {
     case .listening: "waveform.circle.fill"
     case .finalizing: "ellipsis.circle"
     case .attention: "exclamationmark.circle"
@@ -293,7 +296,7 @@ final class AppModel: ObservableObject {
     }
     if let insertionTelemetry {
       if insertionTelemetry.outcome == .confirmed {
-        lastConfirmedAt = Date()
+        flashConfirmed()
       }
       if let releasedAt = insertionTelemetry.releasedAt {
         let latency = max(0, Int(Date().timeIntervalSince(releasedAt) * 1_000))
@@ -374,6 +377,16 @@ final class AppModel: ObservableObject {
     let duration = Date().timeIntervalSince(recordingStartedAt)
     self.recordingStartedAt = nil
     apply(.released(heldDuration: duration))
+  }
+
+  private func flashConfirmed() {
+    let confirmedAt = Date()
+    lastConfirmedAt = confirmedAt
+    Task { @MainActor [weak self] in
+      try? await Task.sleep(for: .milliseconds(1_200))
+      guard let self, lastConfirmedAt == confirmedAt else { return }
+      lastConfirmedAt = nil
+    }
   }
 
   private func handleReturn() {

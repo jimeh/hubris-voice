@@ -16,6 +16,11 @@ struct PasteResult {
 
 @MainActor
 final class TextInsertionService {
+  /// Direct Accessibility writes avoid the clipboard and give a real
+  /// confirmation, but not every field honors them. Settings can force the
+  /// clipboard path for targets where the direct write misbehaves.
+  var allowsDirectInsertion = true
+
   func captureFocusedTarget() -> CapturedFocus? {
     guard
       let application = NSWorkspace.shared.frontmostApplication
@@ -151,7 +156,7 @@ final class TextInsertionService {
         reason: target.snapshot.isSecure ? .secureField : .focusChanged
       )
     }
-    return await pasteUsingClipboard(
+    return await insert(
       text,
       target: target,
       current: current,
@@ -166,7 +171,7 @@ final class TextInsertionService {
     guard !current.snapshot.isSecure else {
       return PasteResult(outcome: .rejected, reason: .secureField)
     }
-    return await pasteUsingClipboard(
+    return await insert(
       text,
       target: current,
       current: current,
@@ -174,12 +179,39 @@ final class TextInsertionService {
     )
   }
 
-  private func pasteUsingClipboard(
+  /// Applies the focus guard, then tries direct Accessibility insertion
+  /// before falling back to a clipboard paste. An ambiguous direct write is
+  /// final: it is never followed by a clipboard paste, so one snippet can
+  /// never be inserted twice.
+  private func insert(
     _ text: String,
     target: CapturedFocus,
     current: CapturedFocus,
     expected: String
   ) async -> PasteResult {
+    if let rejection = focusRejection(target: target, current: current) {
+      return rejection
+    }
+
+    if
+      allowsDirectInsertion,
+      let element = current.element,
+      let direct = await insertDirectly(text, into: element, expected: expected)
+    {
+      return direct
+    }
+
+    return await pasteUsingClipboard(
+      text,
+      current: current,
+      expected: expected
+    )
+  }
+
+  private func focusRejection(
+    target: CapturedFocus,
+    current: CapturedFocus
+  ) -> PasteResult? {
     let decision = PasteSafety.decision(
       captured: target.snapshot,
       current: current.snapshot
@@ -200,7 +232,66 @@ final class TextInsertionService {
         return PasteResult(outcome: .rejected, reason: .focusChanged)
       }
     }
+    return nil
+  }
 
+  /// Returns nil only when the element cannot take a direct write at all
+  /// (attribute not settable, no readable value, or the write failed
+  /// without changing anything), which is the only case where the clipboard
+  /// fallback is safe.
+  private func insertDirectly(
+    _ text: String,
+    into element: AXUIElement,
+    expected: String
+  ) async -> PasteResult? {
+    var settable = DarwinBoolean(false)
+    guard
+      AXUIElementIsAttributeSettable(
+        element,
+        kAXSelectedTextAttribute as CFString,
+        &settable
+      ) == .success,
+      settable.boolValue,
+      let before = accessibleTextState(for: element),
+      before.value != nil
+    else {
+      return nil
+    }
+
+    let status = AXUIElementSetAttributeValue(
+      element,
+      kAXSelectedTextAttribute as CFString,
+      text as CFTypeRef
+    )
+    try? await Task.sleep(for: .milliseconds(50))
+    let after = accessibleTextState(for: element)
+    if status != .success, after == before {
+      Task {
+        await DiagnosticLog.shared.record(
+          "insert path=direct status=\(status.rawValue) unchanged; falling back to clipboard"
+        )
+      }
+      return nil
+    }
+
+    let outcome = PasteConfirmation.outcome(
+      before: before,
+      after: after,
+      expected: expected
+    )
+    Task {
+      await DiagnosticLog.shared.record(
+        "insert path=direct status=\(status.rawValue) outcome=\(outcome)"
+      )
+    }
+    return PasteResult(outcome: outcome, reason: nil)
+  }
+
+  private func pasteUsingClipboard(
+    _ text: String,
+    current: CapturedFocus,
+    expected: String
+  ) async -> PasteResult {
     let beforeState = current.element.flatMap(accessibleTextState)
     let pasteboard = NSPasteboard.general
     let previousContents = PasteboardSnapshot(pasteboard: pasteboard)
@@ -241,260 +332,21 @@ final class TextInsertionService {
 
     try? await Task.sleep(for: .milliseconds(200))
     let afterState = current.element.flatMap(accessibleTextState)
-    return PasteResult(
-      outcome: PasteConfirmation.outcome(
-        before: beforeState,
-        after: afterState,
-        expected: expected
-      ),
-      reason: nil
+    let outcome = PasteConfirmation.outcome(
+      before: beforeState,
+      after: afterState,
+      expected: expected
     )
+    Task {
+      await DiagnosticLog.shared.record("insert path=clipboard outcome=\(outcome)")
+    }
+    return PasteResult(outcome: outcome, reason: nil)
   }
 
   func copy(_ text: String) {
     let pasteboard = NSPasteboard.general
     pasteboard.clearContents()
     pasteboard.setString(text, forType: .string)
-  }
-
-  private func copyAXElement(
-    attribute: String,
-    from element: AXUIElement
-  ) -> AXUIElement? {
-    var value: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(
-        element,
-        attribute as CFString,
-        &value
-      )
-      == .success,
-      let value,
-      CFGetTypeID(value) == AXUIElementGetTypeID()
-    else {
-      return nil
-    }
-    return unsafeDowncast(value, to: AXUIElement.self)
-  }
-
-  private func stringAttribute(
-    _ attribute: String,
-    from element: AXUIElement
-  ) -> String? {
-    var value: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(
-        element,
-        attribute as CFString,
-        &value
-      )
-      == .success
-    else {
-      return nil
-    }
-    return value as? String
-  }
-
-  private func rangeAttribute(
-    _ attribute: String,
-    from element: AXUIElement
-  ) -> CFRange? {
-    var value: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(
-        element,
-        attribute as CFString,
-        &value
-      )
-      == .success,
-      let value,
-      CFGetTypeID(value) == AXValueGetTypeID()
-    else {
-      return nil
-    }
-
-    let rangeValue = unsafeDowncast(value, to: AXValue.self)
-    guard AXValueGetType(rangeValue) == .cfRange else {
-      return nil
-    }
-    var range = CFRange()
-    guard AXValueGetValue(rangeValue, .cfRange, &range) else {
-      return nil
-    }
-    return range
-  }
-
-  private func parameterizedRectAttribute(
-    _ attribute: String,
-    parameter: CFRange,
-    from element: AXUIElement,
-    primaryScreenHeight: CGFloat
-  ) -> LayoutRect? {
-    var parameter = parameter
-    guard let rangeValue = AXValueCreate(.cfRange, &parameter) else {
-      return nil
-    }
-    var value: CFTypeRef?
-    guard
-      AXUIElementCopyParameterizedAttributeValue(
-        element,
-        attribute as CFString,
-        rangeValue,
-        &value
-      ) == .success,
-      let rect = cgRect(from: value)
-    else {
-      return nil
-    }
-    return LayoutRect.fromTopLeft(
-      x: rect.origin.x,
-      y: rect.origin.y,
-      width: rect.size.width,
-      height: rect.size.height,
-      primaryScreenHeight: primaryScreenHeight
-    )
-  }
-
-  private func rect(
-    for element: AXUIElement,
-    primaryScreenHeight: CGFloat
-  ) -> LayoutRect? {
-    guard
-      let position = cgPointAttribute(
-        kAXPositionAttribute,
-        from: element
-      ),
-      let size = cgSizeAttribute(
-        kAXSizeAttribute,
-        from: element
-      ),
-      size.width > 0,
-      size.height > 0
-    else {
-      return nil
-    }
-    return LayoutRect.fromTopLeft(
-      x: position.x,
-      y: position.y,
-      width: size.width,
-      height: size.height,
-      primaryScreenHeight: primaryScreenHeight
-    )
-  }
-
-  private func cgPointAttribute(
-    _ attribute: String,
-    from element: AXUIElement
-  ) -> CGPoint? {
-    var value: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(
-        element,
-        attribute as CFString,
-        &value
-      ) == .success,
-      let value,
-      CFGetTypeID(value) == AXValueGetTypeID()
-    else {
-      return nil
-    }
-    let pointValue = unsafeDowncast(value, to: AXValue.self)
-    guard AXValueGetType(pointValue) == .cgPoint else {
-      return nil
-    }
-    var point = CGPoint.zero
-    return AXValueGetValue(pointValue, .cgPoint, &point) ? point : nil
-  }
-
-  private func cgSizeAttribute(
-    _ attribute: String,
-    from element: AXUIElement
-  ) -> CGSize? {
-    var value: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(
-        element,
-        attribute as CFString,
-        &value
-      ) == .success,
-      let value,
-      CFGetTypeID(value) == AXValueGetTypeID()
-    else {
-      return nil
-    }
-    let sizeValue = unsafeDowncast(value, to: AXValue.self)
-    guard AXValueGetType(sizeValue) == .cgSize else {
-      return nil
-    }
-    var size = CGSize.zero
-    return AXValueGetValue(sizeValue, .cgSize, &size) ? size : nil
-  }
-
-  private func cgRect(from value: CFTypeRef?) -> CGRect? {
-    guard
-      let value,
-      CFGetTypeID(value) == AXValueGetTypeID()
-    else {
-      return nil
-    }
-    let rectValue = unsafeDowncast(value, to: AXValue.self)
-    guard AXValueGetType(rectValue) == .cgRect else {
-      return nil
-    }
-    var rect = CGRect.zero
-    return AXValueGetValue(rectValue, .cgRect, &rect) ? rect : nil
-  }
-
-  private func containsCenterOnScreen(_ rect: LayoutRect) -> Bool {
-    let center = NSPoint(x: rect.midX, y: rect.midY)
-    return NSScreen.screens.contains { $0.frame.contains(center) }
-  }
-
-  private func accessibleTextState(
-    for element: AXUIElement
-  ) -> AccessibleTextState? {
-    let value = stringAttribute(kAXValueAttribute, from: element)
-    let selection = rangeAttribute(
-      kAXSelectedTextRangeAttribute,
-      from: element
-    )
-    guard value != nil || selection != nil else {
-      return nil
-    }
-    return AccessibleTextState(
-      value: value,
-      selectionLocation: selection?.location,
-      selectionLength: selection?.length
-    )
-  }
-
-  private func stringIndex(
-    utf16Offset: Int,
-    in value: String
-  ) -> String.Index? {
-    let utf16Index = value.utf16.index(
-      value.utf16.startIndex,
-      offsetBy: utf16Offset
-    )
-    return String.Index(utf16Index, within: value)
-  }
-
-  private func token(
-    for element: AXUIElement,
-    processID: pid_t
-  ) -> String {
-    if let identifier = stringAttribute(
-      kAXIdentifierAttribute,
-      from: element
-    ), !identifier.isEmpty {
-      return "\(processID):\(identifier)"
-    }
-    return "\(processID):\(CFHash(element))"
-  }
-
-  private func isSecure(element: AXUIElement) -> Bool {
-    let subrole = stringAttribute(kAXSubroleAttribute, from: element)
-    return subrole == (kAXSecureTextFieldSubrole as String)
   }
 }
 
