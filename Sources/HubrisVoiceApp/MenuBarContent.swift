@@ -3,6 +3,7 @@ import HubrisVoiceCore
 import SwiftUI
 
 struct MenuBarContent: View {
+  @Environment(\.openSettings) private var openSettings
   @ObservedObject var model: AppModel
 
   var body: some View {
@@ -32,7 +33,10 @@ struct MenuBarContent: View {
     Button("Reconnect") { model.reconnect() }
     Button("Open Diagnostic Log") { model.openDiagnosticLog() }
     Divider()
-    SettingsLink {
+    Button {
+      NSApplication.shared.activate()
+      openSettings()
+    } label: {
       Label("Settings…", systemImage: "gearshape")
     }
     .keyboardShortcut(",")
