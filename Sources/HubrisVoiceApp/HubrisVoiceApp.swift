@@ -48,6 +48,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       return
     }
     NSApplication.shared.setActivationPolicy(.accessory)
+    DevelopmentTrace.shared.record(
+      "startup insertion=clipboard"
+    )
     AppEnvironment.shared.model.start()
   }
 

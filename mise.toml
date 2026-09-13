@@ -117,3 +117,12 @@ run = "tail -F \"${HOME}/Library/Logs/HubrisVoice/realtime.log\""
 [tasks.clean]
 description = "Remove Swift build outputs"
 run = "swift package clean"
+
+[tasks."bundle:debug"]
+description = "Build and sign a debug app with development diagnostics support"
+run = "./Scripts/bundle.sh debug"
+
+[tasks."dev:trace"]
+description = "Launch the debug app with raw insertion tracing (quit the app first)"
+depends = ["bundle:debug"]
+run = "open '.build/artifacts/Hubris Voice.app' --args --development-trace"

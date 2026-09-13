@@ -8,19 +8,18 @@ field you are dictating into shows the live transcript and a mic-level
 indicator; it wraps to a configurable number of lines, three by default, and a
 cap of one scrolls sideways instead. Release the shortcut to commit the audio;
 the finalized transcript is inserted wherever the caret is at that moment,
-directly through Accessibility when the field supports it and through a
-clipboard paste otherwise. The pill hides as soon as the text is in. If there
+using clipboard paste. The pill hides after the insertion attempt. If there
 is no text field to insert into, the pill shows why and hides again; the
 optional paste-last-transcript shortcut or the menu bar's Copy inserts it
-later. Nothing is left on the clipboard.
+later. The previous clipboard is restored unless another copy has replaced it.
 
 ## Current scope
 
 - One warm Realtime WebSocket with automatic reconnect and backoff; audio
   recorded while disconnected is replayed once the session is ready
 - Live transcript preview in a pill placed at the caret, with a 1 to 6 line cap
-- Direct Accessibility insertion with content-verified confirmation, and a
-  clipboard fallback for Electron apps
+- Clipboard insertion with best-effort content confirmation and temporary markers
+  that keep automatic transcripts out of compatible clipboard histories
 - Smart leading and trailing spaces at the caret
 - Configurable push-to-talk shortcut, including Fn and right-side modifiers,
   tap to lock, Escape to cancel, and an optional paste-last-transcript key
@@ -128,3 +127,19 @@ See [PLAN.md](PLAN.md) for product decisions, architecture, visual direction,
 test strategy, and deferred questions, and
 [docs/plans/2026-09-13-daily-driver.md](docs/plans/2026-09-13-daily-driver.md)
 for the milestone briefs behind the current feature set.
+
+## Development insertion trace
+
+Quit Hubris Voice, then run `mise run dev:trace` to build and launch a signed
+**debug** app with an unsanitized insertion trace.
+
+Each traced process writes a separate `development-<pid>-<uuid>.log` under
+`~/Library/Logs/HubrisVoice/`, readable and writable only by your user. These files
+contain raw dictated text and focused-field text before and after insertion.
+They are for development only; delete them after the investigation. They are not
+rotated automatically. Credentials, audio, and previous clipboard contents are
+not recorded. The normal `realtime.log` remains sanitized.
+
+The debug-only `--development-trace` launch flag enables tracing. It is ignored
+by release builds and never saved in preferences. Quit and relaunch normally to
+disable it. Launching an already-running app does not apply new flags.
