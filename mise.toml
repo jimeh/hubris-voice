@@ -68,13 +68,13 @@ run = '''
 RELEASE_SHA="$(git rev-parse HEAD)" \
 RELEASE_VERSION="$(plutil -extract CFBundleShortVersionString raw -o - Support/Info.plist)" \
 SPARKLE_PUBLIC_KEY_FILE="$PWD/Tests/Fixtures/SparklePublicKey" \
-./Scripts/release-macos.sh build-adhoc
+swift run --package-path Tools/ReleaseTool hubris-voice-release build-adhoc
 '''
 
 [tasks.format]
 description = "Format Swift, zsh, and TOML files"
 run = [
-  "swiftformat Package.swift Sources Tests",
+  "swiftformat Package.swift Sources Tests Tools/ReleaseTool/Package.swift Tools/ReleaseTool/Sources Tools/ReleaseTool/Tests",
   "shfmt --language-dialect zsh --indent 2 --binary-next-line --case-indent --write Scripts/*.sh Tests/*.sh",
   "taplo format mise.toml",
 ]
@@ -82,7 +82,7 @@ run = [
 [tasks."format:check"]
 description = "Check Swift, zsh, and TOML formatting without changing files"
 run = [
-  "swiftformat --lint Package.swift Sources Tests",
+  "swiftformat --lint Package.swift Sources Tests Tools/ReleaseTool/Package.swift Tools/ReleaseTool/Sources Tools/ReleaseTool/Tests",
   "shfmt --language-dialect zsh --indent 2 --binary-next-line --case-indent --diff Scripts/*.sh Tests/*.sh",
   "taplo format --check mise.toml",
 ]
@@ -137,7 +137,7 @@ run = ["swiftlint lint --fix", "mise run format"]
 
 [tasks.typecheck]
 description = "Compile all production Swift targets"
-run = "swift build"
+run = ["swift build", "swift build --package-path Tools/ReleaseTool"]
 
 [tasks.test]
 description = "Run bundle metadata, signing resolver, and Swift tests"
@@ -147,6 +147,7 @@ run = [
   "./Tests/SigningIdentityResolverTests.sh",
   "./Tests/ReleaseConfigurationTests.sh",
   "swift test",
+  "swift test --package-path Tools/ReleaseTool",
 ]
 
 [tasks.check]
@@ -197,24 +198,24 @@ run = "./Scripts/prepare-sparkle.sh --check"
 
 [tasks."release:validate"]
 description = "Validate the exact release source and committed version"
-run = "./Scripts/release-macos.sh validate-source"
+run = "swift run --package-path Tools/ReleaseTool hubris-voice-release validate-source"
 
 [tasks."release:macos"]
 description = "Build, sign, notarize, and package the universal macOS release"
-run = "./Scripts/release-macos.sh build"
+run = "swift run --package-path Tools/ReleaseTool hubris-voice-release build"
 
 [tasks."release:appcast"]
 description = "Generate the signed Sparkle appcast and final checksums"
-run = "./Scripts/release-macos.sh generate-appcast"
+run = "swift run --package-path Tools/ReleaseTool hubris-voice-release generate-appcast"
 
 [tasks."release:validate-draft"]
 description = "Validate the exact draft GitHub Release"
-run = "./Scripts/release-github.sh validate-draft"
+run = "swift run --package-path Tools/ReleaseTool hubris-voice-release validate-draft"
 
 [tasks."release:upload"]
 description = "Upload and verify the exact draft release assets"
-run = "./Scripts/release-github.sh upload-assets"
+run = "swift run --package-path Tools/ReleaseTool hubris-voice-release upload-assets"
 
 [tasks."release:publish"]
 description = "Publish the verified GitHub Release"
-run = "./Scripts/release-github.sh publish"
+run = "swift run --package-path Tools/ReleaseTool hubris-voice-release publish"

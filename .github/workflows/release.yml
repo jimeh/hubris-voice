@@ -1,40 +1,6 @@
 name: Release
 
 on:
-  workflow_call:
-    inputs:
-      publish:
-        description: Publish the exact draft release after verification
-        required: true
-        type: boolean
-      sha:
-        description: Expected workflow event SHA
-        required: true
-        type: string
-      tag:
-        description: Exact release tag
-        required: true
-        type: string
-      version:
-        description: Release version without the v prefix
-        required: true
-        type: string
-    secrets:
-      RELEASE_BOT_PRIVATE_KEY:
-        description: Private key for the release bot GitHub App
-        required: true
-      APPLE_NOTARIZATION_KEY_P8_BASE64:
-        description: Environment-provided App Store Connect API private key
-        required: false
-      MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64:
-        description: Environment-provided Developer ID Application identity
-        required: false
-      MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD:
-        description: Environment-provided PKCS#12 password
-        required: false
-      SPARKLE_EDDSA_PRIVATE_KEY:
-        description: Environment-provided Sparkle appcast signing key
-        required: false
   workflow_dispatch:
     inputs:
       publish:
@@ -114,9 +80,6 @@ jobs:
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
           cache: false
-
-      - name: Prepare verified Sparkle distribution
-        run: mise run sparkle:prepare
 
       - name: Validate checked-out source and version
         run: mise run release:validate
