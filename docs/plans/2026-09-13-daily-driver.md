@@ -1,8 +1,9 @@
 # Daily driver plan
 
-Status: implemented on 2026-09-13 across six milestones; each has its own brief
-in this directory. Manual verification with the user present is still open for
-the items listed under each milestone. Originally drafted 2026-09-13 and revised
+Status: milestones 1 to 6 implemented on 2026-09-13; milestone 7 was designed
+on 2026-09-13 after reviewing the overlay in use and is not yet implemented.
+Each milestone has its own brief in this directory. Manual verification with
+the user present is still open for the items listed under each milestone. Originally drafted 2026-09-13 and revised
 after an independent review. Builds on
 [PLAN.md](../../PLAN.md), which stays the product and architecture reference.
 This document covers the work needed to move Hubris Voice from a working proof
@@ -268,6 +269,26 @@ Work:
   Off by default.
 
 Tests: history cap and ordering, outcome recording.
+
+### 7. Pill overlay and insertion without clicks
+
+Added after using milestones 1 to 6. The overlay carried too many words and
+controls, and any insertion that could not be confirmed made the user click
+Copy and paste by hand. Brief: [milestone-7-pill-overlay.md](milestone-7-pill-overlay.md).
+
+Work:
+
+- Replace the overlay with a capsule holding only the transcript and five
+  mic-level bars. A configurable line cap of 1 to 6, default 3; a cap of 1
+  scrolls sideways instead of wrapping.
+- Insert at the focused element when the transcript arrives. Reject only
+  secure fields and missing focus; a focus change is no longer a failure.
+- Confirmed and attempted insertions hide the overlay. Remaining failures
+  show a one-line reason plus the paste-last shortcut as the recovery, then
+  hide. Nothing waits for a click and nothing is left on the clipboard.
+
+Tests: layout policy, placement alignment, settings clamp, session
+transitions for the reduced attention states.
 
 ## Later options
 
