@@ -47,11 +47,11 @@ final class OverlayPresentationTests: XCTestCase {
     let probe = CompletionProbe()
 
     await scheduler.schedule(after: .milliseconds(10)) {
-      Task {
-        await probe.markCompleted()
-      }
+      probe.markCompleted()
     }
 
+    let didCompleteImmediately = await probe.isCompleted
+    XCTAssertFalse(didCompleteImmediately)
     let didComplete = await waitUntilCompleted(probe)
     XCTAssertTrue(didComplete)
   }
@@ -61,9 +61,7 @@ final class OverlayPresentationTests: XCTestCase {
     let probe = CompletionProbe()
 
     await scheduler.schedule(after: .milliseconds(10)) {
-      Task {
-        await probe.markCompleted()
-      }
+      probe.markCompleted()
     }
     await scheduler.cancel()
 
@@ -78,14 +76,10 @@ final class OverlayPresentationTests: XCTestCase {
     let replacementProbe = CompletionProbe()
 
     await scheduler.schedule(after: .milliseconds(40)) {
-      Task {
-        await firstProbe.markCompleted()
-      }
+      firstProbe.markCompleted()
     }
     await scheduler.schedule(after: .milliseconds(10)) {
-      Task {
-        await replacementProbe.markCompleted()
-      }
+      replacementProbe.markCompleted()
     }
 
     let replacementDidComplete = await waitUntilCompleted(replacementProbe)
@@ -111,7 +105,8 @@ private func waitUntilCompleted(
   return await probe.isCompleted
 }
 
-private actor CompletionProbe {
+@MainActor
+private final class CompletionProbe {
   private(set) var isCompleted = false
 
   func markCompleted() {
