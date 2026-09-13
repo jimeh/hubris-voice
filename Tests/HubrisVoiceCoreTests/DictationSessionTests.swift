@@ -435,3 +435,46 @@ private extension DictationSessionTests {
     }
   }
 }
+
+extension DictationSessionTests {
+  func testDeltasWhileListeningPreviewLiveAndCarryTheItemIntoPending() {
+    var session = readySession()
+    _ = session.transition(.pressed)
+
+    XCTAssertEqual(
+      session.transition(.server(.transcriptDelta(itemID: "live", delta: "Ship the "))),
+      []
+    )
+    XCTAssertEqual(session.listening?.transcript, "Ship the ")
+    XCTAssertEqual(session.presentation?.transcript, "Ship the ")
+
+    _ = session.transition(.server(.transcriptDelta(itemID: "other", delta: "noise")))
+    XCTAssertEqual(session.listening?.transcript, "Ship the ")
+
+    _ = session.transition(.released(heldDuration: 1))
+    XCTAssertEqual(session.pending.first?.itemID, "live")
+    _ = session.transition(.server(.inputCommitted(itemID: "live")))
+    _ = session.transition(.server(.transcriptDelta(itemID: "live", delta: "release")))
+    XCTAssertEqual(session.pending.first?.transcript, "Ship the release")
+    XCTAssertEqual(
+      session.transition(.server(.transcriptCompleted(itemID: "live", transcript: "Ship the release."))).last,
+      .insert(generation: 0, text: "Ship the release.")
+    )
+  }
+
+  func testConnectionLossWhileListeningResetsTheLiveItemAndPartialText() {
+    var session = readySession()
+    _ = session.transition(.pressed)
+    _ = session.transition(.server(.transcriptDelta(itemID: "live", delta: "hello")))
+
+    _ = session.transition(.connectionLost(message: "lost"))
+    XCTAssertNil(session.listening?.itemID)
+    XCTAssertEqual(session.listening?.transcript, "")
+
+    _ = session.transition(.reconnectDelayElapsed(attempt: 1))
+    _ = session.transition(.sessionReady)
+    _ = session.transition(.server(.transcriptDelta(itemID: "replayed", delta: "hello again")))
+    XCTAssertEqual(session.listening?.itemID, "replayed")
+    XCTAssertEqual(session.listening?.transcript, "hello again")
+  }
+}

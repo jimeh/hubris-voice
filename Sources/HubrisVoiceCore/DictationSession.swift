@@ -307,9 +307,7 @@ private extension DictationSession {
     switch connection {
     case .ready:
       connection = .disconnected(attempt: 1)
-      for index in pending.indices {
-        pending[index].itemID = nil
-      }
+      clearPendingItemIDs()
       return [
         .scheduleReconnect(
           after: configuration.reconnect.delay(forAttempt: 1),
@@ -459,12 +457,20 @@ private extension DictationSession {
     case .sessionReady:
       return sessionBecameReady()
     case .inputCommitted(let itemID):
+      guard !pending.contains(where: { $0.itemID == itemID }) else { return [] }
       guard let index = pending.firstIndex(where: { $0.itemID == nil }) else { return [] }
       pending[index].itemID = itemID
       return []
     case .transcriptDelta(let itemID, let delta):
-      guard let index = pending.firstIndex(where: { $0.itemID == itemID }) else { return [] }
-      pending[index].transcript += delta
+      if let index = pending.firstIndex(where: { $0.itemID == itemID }) {
+        pending[index].transcript += delta
+        return []
+      }
+      // The server streams deltas for the uncommitted buffer while recording,
+      // so the first live delta names the item the listening snippet will commit.
+      guard listening != nil, listening?.itemID == nil || listening?.itemID == itemID else { return [] }
+      listening?.itemID = itemID
+      listening?.transcript += delta
       return []
     case .transcriptCompleted(let itemID, let transcript):
       return transcriptCompleted(itemID: itemID, transcript: transcript)
@@ -558,10 +564,15 @@ private extension DictationSession {
     wasCopied = false
   }
 
+  /// A new socket re-transcribes replayed audio from scratch, so live item IDs
+  /// and their partial transcripts are both stale.
   mutating func clearPendingItemIDs() {
     for index in pending.indices {
       pending[index].itemID = nil
+      pending[index].transcript = ""
     }
+    listening?.itemID = nil
+    listening?.transcript = ""
   }
 
   func presentationValues(for result: PresentedResult) -> PresentationValues {

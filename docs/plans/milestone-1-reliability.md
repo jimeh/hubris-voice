@@ -199,7 +199,7 @@ Connection events, independent of snippet state:
 | `connectRequested(false)` | `connecting`, `ready`, `unconfigured` | unchanged | none |
 | `connectRequested(true)` | `ready`, `connecting`, `disconnected` | `connecting(0)` | `disconnect`, `cancelReconnect`, `connect(0)` |
 | `connectionFailed` | `connecting(n)` | `disconnected(n+1)` | `scheduleReconnect(after: delay(n+1), attempt: n+1)` |
-| `connectionLost` | `ready` | `disconnected(1)` | `scheduleReconnect(after: delay(1), attempt: 1)` and, for every pending snippet, `itemID = nil` |
+| `connectionLost` | `ready` | `disconnected(1)` | `scheduleReconnect(after: delay(1), attempt: 1)`; every live snippet resets `itemID` and its partial transcript, since replay is transcribed afresh |
 | `connectionLost` | `connecting(n)` | as `connectionFailed` | as `connectionFailed` |
 | `reconnectDelayElapsed(n)` | `disconnected(n)` | `connecting(n)` | `connect(n)` |
 | `sessionReady` | `connecting` | `ready` | replay effects, see below |
@@ -234,6 +234,7 @@ Snippet events:
 | `localError(m)` | otherwise | `presented = .error(m, "")` | `scheduleDismiss(attentionLinger)` |
 | `server(.inputCommitted(id))` | first pending snippet with `itemID == nil` exists | that snippet gets `itemID` | none |
 | `server(.transcriptDelta(id, d))` | pending snippet with `itemID == id` | append `d` | none |
+| `server(.transcriptDelta(id, d))` | no pending match, listening snippet with `itemID` nil or `== id` | listening snippet adopts `id`, appends `d` (live preview) | none |
 | `server(.transcriptCompleted(id, t))` | pending snippet with that id, trimmed `t` empty | remove from pending, `presented = .error("No speech was detected.", "")` | `cancelFinalizingTimeout(g)`, `clearAudio(g)`, `discardSnippet(g)`, `scheduleDismiss(attentionLinger)` |
 | `server(.transcriptCompleted(id, t))` | pending snippet with that id | move to `inserting` with `transcript = t` | `cancelFinalizingTimeout(g)`, `clearAudio(g)`, `insert(g, t)` |
 | `server(.error(m))` | any snippet live | `presented = .error(m, newest transcript)`; listening snippet cancelled as `cancelRequested`; pending snippets untouched | as `cancelRequested` for the listening snippet, `scheduleDismiss(attentionLinger)` if text empty |
