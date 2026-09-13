@@ -52,8 +52,7 @@ final class OverlayPresentationTests: XCTestCase {
       }
     }
 
-    try? await Task.sleep(for: .milliseconds(40))
-    let didComplete = await probe.isCompleted
+    let didComplete = await waitUntilCompleted(probe)
     XCTAssertTrue(didComplete)
   }
 
@@ -68,7 +67,7 @@ final class OverlayPresentationTests: XCTestCase {
     }
     await scheduler.cancel()
 
-    try? await Task.sleep(for: .milliseconds(40))
+    try? await Task.sleep(for: .milliseconds(100))
     let didComplete = await probe.isCompleted
     XCTAssertFalse(didComplete)
   }
@@ -89,12 +88,27 @@ final class OverlayPresentationTests: XCTestCase {
       }
     }
 
-    try? await Task.sleep(for: .milliseconds(70))
+    let replacementDidComplete = await waitUntilCompleted(replacementProbe)
+    try? await Task.sleep(for: .milliseconds(80))
     let firstDidComplete = await firstProbe.isCompleted
-    let replacementDidComplete = await replacementProbe.isCompleted
     XCTAssertFalse(firstDidComplete)
     XCTAssertTrue(replacementDidComplete)
   }
+}
+
+private func waitUntilCompleted(
+  _ probe: CompletionProbe,
+  timeout: Duration = .seconds(1)
+) async -> Bool {
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: timeout)
+  while clock.now < deadline {
+    if await probe.isCompleted {
+      return true
+    }
+    try? await Task.sleep(for: .milliseconds(10))
+  }
+  return await probe.isCompleted
 }
 
 private actor CompletionProbe {
