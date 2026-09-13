@@ -85,7 +85,10 @@ final class OverlayController {
     hostingView = NSHostingView(rootView: PillView(model: model))
     hostingView.sizingOptions = []
     panel = NSPanel(
-      contentRect: NSRect(origin: .zero, size: NSSize(width: 52, height: 42)),
+      contentRect: NSRect(
+        origin: .zero,
+        size: NSSize(width: 52, height: 20 + PillLayout.lineHeight)
+      ),
       styleMask: [.borderless, .nonactivatingPanel],
       backing: .buffered,
       defer: true
@@ -108,6 +111,9 @@ final class OverlayController {
 
     // Published values arrive before the property changes, so the layout
     // works from the emitted snapshot rather than reading the model back.
+    // Nothing is laid out while hidden: the subscription fires on creation,
+    // which happens inside SwiftUI's app graph update, and forcing the
+    // hosting view to render there aborts the process.
     Publishers.CombineLatest(
       Publishers.CombineLatest3(model.$transcript, model.$message, model.$mode),
       Publishers.CombineLatest3(model.$lineCap, model.$pendingCount, model.$isLocked)
@@ -123,7 +129,10 @@ final class OverlayController {
       )
     }
     .removeDuplicates()
-    .sink { [weak self] input in self?.layout(input) }
+    .sink { [weak self] input in
+      guard let self, panel.isVisible else { return }
+      layout(input)
+    }
     .store(in: &cancellables)
   }
 
