@@ -1,3 +1,4 @@
+import AppKit
 import ApplicationServices
 import AVFoundation
 import Foundation
@@ -24,6 +25,12 @@ enum MicrophonePermission: Equatable {
 
 @MainActor
 enum PermissionService {
+  enum SystemPermission {
+    case microphone
+    case accessibility
+    case inputMonitoring
+  }
+
   static var microphone: MicrophonePermission {
     switch AVCaptureDevice.authorizationStatus(for: .audio) {
     case .authorized:
@@ -43,6 +50,10 @@ enum PermissionService {
     AXIsProcessTrusted()
   }
 
+  static var inputMonitoring: Bool {
+    CGPreflightListenEventAccess()
+  }
+
   static func requestMicrophone() async -> Bool {
     await AVCaptureDevice.requestAccess(for: .audio)
   }
@@ -52,5 +63,24 @@ enum PermissionService {
     AXIsProcessTrustedWithOptions(
       ["AXTrustedCheckOptionPrompt": true] as CFDictionary
     )
+  }
+
+  @discardableResult
+  static func requestInputMonitoring() -> Bool {
+    CGRequestListenEventAccess()
+  }
+
+  static func openSystemSettings(for permission: SystemPermission) {
+    let pane = switch permission {
+    case .microphone: "Privacy_Microphone"
+    case .accessibility: "Privacy_Accessibility"
+    case .inputMonitoring: "Privacy_ListenEvent"
+    }
+    guard let url = URL(
+      string: "x-apple.systempreferences:com.apple.preference.security?\(pane)"
+    ) else {
+      return
+    }
+    NSWorkspace.shared.open(url)
   }
 }

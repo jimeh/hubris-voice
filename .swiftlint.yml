@@ -67,3 +67,9 @@ function_body_length:
 cyclomatic_complexity:
   warning: 12
   error: 20
+
+identifier_name:
+  # Coordinates in the core layout types are conventionally x and y.
+  excluded:
+    - x
+    - y

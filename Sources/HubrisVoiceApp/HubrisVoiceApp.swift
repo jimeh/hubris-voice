@@ -12,15 +12,7 @@ final class AppEnvironment {
   private init() {
     let model = AppModel()
     self.model = model
-    overlay = OverlayController(
-      model: model.overlayModel,
-      onCopy: { [weak model] in
-        model?.copyResult()
-      },
-      onDismiss: { [weak model] in
-        model?.dismissOverlay()
-      }
-    )
+    overlay = OverlayController(model: model.overlayModel)
     model.overlayController = overlay
   }
 }
@@ -56,6 +48,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       return
     }
     NSApplication.shared.setActivationPolicy(.accessory)
+    DevelopmentTrace.shared.record(
+      "startup insertion=clipboard"
+    )
     AppEnvironment.shared.model.start()
   }
 

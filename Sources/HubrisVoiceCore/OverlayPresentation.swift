@@ -1,32 +1,65 @@
 import Foundation
 
-public struct OverlayLayoutPolicy: Sendable {
-  public let minimumTranscriptHeight: Double
-  public let maximumTranscriptHeight: Double
-  public let panelChromeHeight: Double
+/// Sizes the pill overlay from measured text. The app measures with the real
+/// font and reports a width and line count; this policy owns the arithmetic
+/// so the cap and chrome rules stay testable.
+public struct PillLayoutPolicy: Equatable, Sendable {
+  public var lineHeight: Double
+  public var lineCap: Int
+  public var verticalPadding: Double
+  public var leadingPadding: Double
+  public var barsWidth: Double
+  public var textGap: Double
+  public var trailingPadding: Double
+  public var maximumWidth: Double
 
   public init(
-    minimumTranscriptHeight: Double,
-    maximumTranscriptHeight: Double,
-    panelChromeHeight: Double
+    lineHeight: Double = 22,
+    lineCap: Int = 3,
+    verticalPadding: Double = 10,
+    leadingPadding: Double = 14,
+    barsWidth: Double = 22,
+    textGap: Double = 12,
+    trailingPadding: Double = 16,
+    maximumWidth: Double = 440
   ) {
-    self.minimumTranscriptHeight = minimumTranscriptHeight
-    self.maximumTranscriptHeight = maximumTranscriptHeight
-    self.panelChromeHeight = panelChromeHeight
+    self.lineHeight = lineHeight
+    self.lineCap = lineCap
+    self.verticalPadding = verticalPadding
+    self.leadingPadding = leadingPadding
+    self.barsWidth = barsWidth
+    self.textGap = textGap
+    self.trailingPadding = trailingPadding
+    self.maximumWidth = maximumWidth
   }
 
-  public func transcriptViewportHeight(
-    measuredTextHeight: Double
-  ) -> Double {
-    min(
-      max(measuredTextHeight, minimumTranscriptHeight),
-      maximumTranscriptHeight
-    )
+  public var isSingleLine: Bool {
+    lineCap <= 1
   }
 
-  public func panelHeight(measuredTextHeight: Double) -> Double {
-    panelChromeHeight
-      + transcriptViewportHeight(measuredTextHeight: measuredTextHeight)
+  /// Widest the text column can be before wrapping or scrolling.
+  public var maximumTextWidth: Double {
+    maximumWidth - leadingPadding - barsWidth - textGap - trailingPadding
+  }
+
+  public func visibleLines(measuredLines: Int) -> Int {
+    max(1, min(measuredLines, max(1, lineCap)))
+  }
+
+  /// `measuredTextWidth` is the wider of the transcript and the message line;
+  /// zero means there is no text and the pill collapses to the bars.
+  /// `messageHeight` is added below the transcript when a message is shown.
+  public func panelSize(
+    measuredTextWidth: Double,
+    measuredLines: Int,
+    messageHeight: Double = 0
+  ) -> LayoutSize {
+    let textWidth = min(max(0, measuredTextWidth), maximumTextWidth)
+    let textColumn = textWidth > 0 ? textGap + textWidth : 0
+    let width = leadingPadding + barsWidth + textColumn + trailingPadding
+    let textHeight = Double(visibleLines(measuredLines: measuredLines)) * lineHeight
+    let height = verticalPadding * 2 + textHeight + messageHeight
+    return LayoutSize(width: width, height: height)
   }
 }
 

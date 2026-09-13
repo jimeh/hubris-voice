@@ -3,6 +3,12 @@ import Foundation
 import XCTest
 
 final class RealtimeProtocolTests: XCTestCase {
+  func testErrorPreservesTheClientEventID() throws {
+    let data = Data(#"{"type":"error","event_id":"server","error":{"message":"Empty buffer","event_id":"commit"}}"#
+      .utf8)
+    XCTAssertEqual(try RealtimeServerEvent.decode(data), .error(message: "Empty buffer", eventID: "commit"))
+  }
+
   func testEndpointDeclaresTranscriptionIntentWithoutSessionModel() throws {
     let endpoint = try XCTUnwrap(RealtimeAPI.endpoint)
     let components = try XCTUnwrap(
@@ -22,7 +28,7 @@ final class RealtimeProtocolTests: XCTestCase {
 
   func testSessionUpdateUsesTranscriptionSessionAndCurrentLiveFields() throws {
     let configuration = RealtimeSessionConfiguration(
-      language: "en",
+      languages: ["en"],
       prompt: "Names are written exactly as supplied.",
       keywords: ["Hucode", "Treeboot"],
       delay: .low
@@ -52,6 +58,24 @@ final class RealtimeProtocolTests: XCTestCase {
     XCTAssertEqual(transcription["languages"] as? [String], ["en"])
     XCTAssertEqual(transcription["keywords"] as? [String], ["Hucode", "Treeboot"])
     XCTAssertEqual(transcription["delay"] as? String, "low")
+  }
+
+  func testSessionUpdateOmitsEmptyLanguages() throws {
+    let configuration = RealtimeSessionConfiguration(
+      languages: [],
+      prompt: "",
+      keywords: [],
+      delay: .low
+    )
+
+    let data = try RealtimeClientEvent.sessionUpdate(configuration).encoded()
+    let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let session = try XCTUnwrap(object["session"] as? [String: Any])
+    let audio = try XCTUnwrap(session["audio"] as? [String: Any])
+    let input = try XCTUnwrap(audio["input"] as? [String: Any])
+    let transcription = try XCTUnwrap(input["transcription"] as? [String: Any])
+
+    XCTAssertNil(transcription["languages"])
   }
 
   func testAudioAppendAndCommitEncodeExpectedEvents() throws {
