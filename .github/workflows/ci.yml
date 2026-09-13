@@ -49,3 +49,7 @@ jobs:
       - name: Verify ad-hoc app bundle
         if: matrix.verify_bundle
         run: mise run bundle:verify:adhoc
+
+      - name: Verify universal Sparkle app bundle
+        if: matrix.verify_bundle
+        run: mise run bundle:verify:adhoc:sparkle

@@ -32,6 +32,9 @@ struct MenuBarContent: View {
     Toggle("Dictation Enabled", isOn: $model.dictationEnabled)
     Button("Reconnect") { model.reconnect() }
     Button("Open Diagnostic Log") { model.openDiagnosticLog() }
+    if model.updatesAvailable {
+      Button("Check for Updates…") { model.checkForUpdates() }
+    }
     Divider()
     Button {
       NSApplication.shared.activate()

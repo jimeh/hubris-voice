@@ -1,0 +1,23 @@
+{
+  "version": "2.9.6",
+  "published_at": "2026-08-17T01:40:46Z",
+  "minimum_macos": "10.13",
+  "source": {
+    "name": "Sparkle-2.9.6.tar.xz",
+    "url": "https://github.com/sparkle-project/Sparkle/releases/download/2.9.6/Sparkle-2.9.6.tar.xz",
+    "sha256": "52bf9e88cdd972fc0c81501377a880e90d47031bd8ca5462488f843e2609e192"
+  },
+  "framework": {
+    "identifier": "org.sparkle-project.Sparkle",
+    "license_sha256": "389a4e4e9a32f059775b13a06e25a591445ba229d2838d26dd3e7c0c45127cfe",
+    "binary_sha256": "af5e78fd89e26dedda1bbbe96221fd7e87abdbc58b4802e470f3157d5966bc5a",
+    "autoupdate_sha256": "3fcecad5bccd77b920f122cb6b226bd43bad351fc4001d11f8624caef624e57a",
+    "updater_sha256": "06a959c52f345b25e2c11dc2e229302a1a702873c81406b1944c15ca2819d200"
+  },
+  "tools": {
+    "generate_appcast_sha256": "b3b54ba3fb85ef1f25eb2f5a9ad90c32ba6e71af777b181c50ffb5d860bac6b7",
+    "generate_keys_sha256": "2d18ed3a9c744e58150513d9b2e3c2eb76fd0b9621e3e4678d46dd972547e8fe",
+    "sign_update_sha256": "bfb52400c3da18bb4c251ac4818c2c2e1e31c2e649a45b31c11109b6e57b34ad"
+  },
+  "license_url": "https://github.com/sparkle-project/Sparkle/blob/2.9.6/LICENSE"
+}

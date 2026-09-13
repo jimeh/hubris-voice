@@ -9,7 +9,9 @@ minimum_release_age = "7d"
 actionlint = "latest"
 lefthook = "latest"
 pinact = "latest"
+"pipx:spdx-tools" = "latest"
 ripgrep = "latest"
+syft = "latest"
 swiftformat = "latest"
 swiftlint = "latest"
 taplo = "latest"
@@ -57,6 +59,16 @@ run = [
   "codesign --verify --deep --strict --verbose=2 '.build/artifacts/Hubris Voice.app'",
 ]
 
+[tasks."bundle:verify:adhoc:sparkle"]
+description = "Build and verify the universal updater-enabled ad-hoc app bundle"
+depends = ["sparkle:prepare"]
+run = '''
+RELEASE_SHA="$(git rev-parse HEAD)" \
+RELEASE_VERSION="$(plutil -extract CFBundleShortVersionString raw -o - Support/Info.plist)" \
+SPARKLE_PUBLIC_KEY_FILE="$PWD/Tests/Fixtures/SparklePublicKey" \
+./Scripts/release-macos.sh build-adhoc
+'''
+
 [tasks.format]
 description = "Format Swift and TOML files"
 run = ["swiftformat Package.swift Sources Tests", "taplo format mise.toml"]
@@ -96,6 +108,10 @@ run = [
   "treeboot check",
   "taplo lint mise.toml",
   "plutil -lint Support/Info.plist",
+  "plutil -lint Support/HubrisVoice.entitlements",
+  "plutil -convert xml1 -o /dev/null .github/release-please-config.json",
+  "plutil -convert xml1 -o /dev/null .github/.release-please-manifest.json",
+  "./Scripts/prepare-sparkle.sh --manifest-only",
 ]
 
 [tasks.lint]
@@ -122,6 +138,7 @@ depends = ["typecheck"]
 run = [
   "./Tests/BundleMetadataTests.sh",
   "./Tests/SigningIdentityResolverTests.sh",
+  "./Tests/ReleaseConfigurationTests.sh",
   "swift test",
 ]
 
@@ -162,3 +179,35 @@ run = "./Scripts/bundle.sh debug"
 description = "Launch the debug app with raw insertion tracing (quit the app first)"
 depends = ["bundle:debug"]
 run = "open '.build/artifacts/Hubris Voice.app' --args --development-trace"
+
+[tasks."sparkle:prepare"]
+description = "Download and verify the pinned Sparkle framework and release tools"
+run = "./Scripts/prepare-sparkle.sh"
+
+[tasks."sparkle:check"]
+description = "Verify the prepared Sparkle distribution"
+run = "./Scripts/prepare-sparkle.sh --check"
+
+[tasks."release:validate"]
+description = "Validate the exact release source and committed version"
+run = "./Scripts/release-macos.sh validate-source"
+
+[tasks."release:macos"]
+description = "Build, sign, notarize, and package the universal macOS release"
+run = "./Scripts/release-macos.sh build"
+
+[tasks."release:appcast"]
+description = "Generate the signed Sparkle appcast and final checksums"
+run = "./Scripts/release-macos.sh generate-appcast"
+
+[tasks."release:validate-draft"]
+description = "Validate the exact draft GitHub Release"
+run = "./Scripts/release-github.sh validate-draft"
+
+[tasks."release:upload"]
+description = "Upload and verify the exact draft release assets"
+run = "./Scripts/release-github.sh upload-assets"
+
+[tasks."release:publish"]
+description = "Publish the verified GitHub Release"
+run = "./Scripts/release-github.sh publish"

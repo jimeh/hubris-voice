@@ -55,8 +55,9 @@ The bundle is written to:
 .build/artifacts/Hubris Voice.app
 ```
 
-The project has no third-party dependencies. Builds and tests do not connect to
-OpenAI.
+The application source has no package dependencies. Ordinary builds and tests
+do not connect to OpenAI or include third-party code. Signed distribution builds
+embed the pinned Sparkle framework for self-updates.
 
 ### Development signing
 
@@ -80,7 +81,17 @@ HUBRIS_VOICE_SIGNING_IDENTITY = "APPLE_DEVELOPMENT_SHA1"
 ```
 
 Developer ID identities are intentionally ignored by development builds. They
-are reserved for future notarized distribution builds.
+are used only by the notarized distribution workflow.
+
+### Releases
+
+Release Please maintains the changelog and release version. A release packages
+a universal Developer ID signed and notarized application as both ZIP and DMG,
+publishes a signed Sparkle appcast and SPDX SBOM, and attaches GitHub provenance
+and SBOM attestations before making the immutable GitHub Release public.
+
+See [the release runbook](docs/agents/releases.md) for credential setup, manual
+verification, publication, and recovery procedures.
 
 ## First run
 

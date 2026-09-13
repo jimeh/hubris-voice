@@ -238,6 +238,7 @@ final class AppModel: ObservableObject {
   private let soundCues = SoundCues()
   private let keychain = KeychainStore()
   private let loginItemService = LoginItemService()
+  private let updater = NativeUpdater()
   private let defaults: UserDefaults
   private let reconnectScheduler = DelayedActionScheduler()
   private let dismissScheduler = DelayedActionScheduler()
@@ -491,6 +492,14 @@ final class AppModel: ObservableObject {
 
   func reconnect() {
     apply(.connectRequested(force: true))
+  }
+
+  var updatesAvailable: Bool {
+    updater.isAvailable
+  }
+
+  func checkForUpdates() {
+    updater.checkForUpdates()
   }
 
   func openDiagnosticLog() {
