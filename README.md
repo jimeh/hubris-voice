@@ -122,9 +122,10 @@ mise run check
 mise run verify
 ```
 
-`check` runs formatting checks, SwiftLint, configuration and shell validation,
-compilation, and tests. `verify` additionally builds and strictly verifies the
-signed release app bundle. Use `mise run doctor` to diagnose local setup and
+`check` runs Swift, zsh, and TOML formatting checks, SwiftLint, configuration
+and shell validation, compilation, and tests. `verify` additionally builds and
+strictly verifies the signed release app bundle. Use `mise run doctor` to
+diagnose local setup and
 `mise run logs` to follow the sanitized Realtime diagnostic log.
 
 Lefthook runs fast staged-file formatters and linters before each commit. The

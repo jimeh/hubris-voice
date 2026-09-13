@@ -30,11 +30,10 @@ validate_inputs() {
   required_env RELEASE_SHA
   required_env RELEASE_TAG
   required_env RELEASE_VERSION
-  if [[ ! "${GITHUB_REPOSITORY}" =~ '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' ]] ||
-    [[ ! "${RELEASE_SHA}" =~ '^[0-9a-f]{40}$' ]] ||
-    [[ ! "${RELEASE_VERSION}" =~ '^[0-9]+\.[0-9]+\.[0-9]+$' ]] ||
-    [[ "${RELEASE_TAG}" != "v${RELEASE_VERSION}" ]]
-  then
+  if [[ ! "${GITHUB_REPOSITORY}" =~ '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' ]] \
+    || [[ ! "${RELEASE_SHA}" =~ '^[0-9a-f]{40}$' ]] \
+    || [[ ! "${RELEASE_VERSION}" =~ '^[0-9]+\.[0-9]+\.[0-9]+$' ]] \
+    || [[ "${RELEASE_TAG}" != "v${RELEASE_VERSION}" ]]; then
     print -u2 -- "Release SHA, tag, or version is malformed or inconsistent"
     exit 1
   fi
@@ -79,7 +78,7 @@ validate_asset_inventory() {
         print -u2 -- "Draft release contains unexpected asset ${actual_name}"
         exit 1
       fi
-    done <<< "${actual_names}"
+    done <<<"${actual_names}"
   elif [[ "${actual_names}" != "${expected_names}" ]]; then
     print -u2 -- "Draft release asset inventory does not match the expected set"
     exit 1
@@ -129,11 +128,11 @@ publish_release() {
 }
 
 case "${1:-}" in
-validate-draft) validate_draft ;;
-upload-assets) upload_assets ;;
-publish) publish_release ;;
-*)
-  print -u2 -- "Usage: ${0:t} {validate-draft|upload-assets|publish}"
-  exit 2
-  ;;
+  validate-draft) validate_draft ;;
+  upload-assets) upload_assets ;;
+  publish) publish_release ;;
+  *)
+    print -u2 -- "Usage: ${0:t} {validate-draft|upload-assets|publish}"
+    exit 2
+    ;;
 esac

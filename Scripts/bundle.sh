@@ -10,11 +10,11 @@ artifact_root="${repo_dir}/.build/artifacts"
 app_dir="${artifact_root}/Hubris Voice.app"
 
 case "${signing_mode}" in
-"development" | "adhoc") ;;
-*)
-  print -u2 -- "Usage: ${0:t} [release|debug] [development|adhoc]"
-  exit 2
-  ;;
+  "development" | "adhoc") ;;
+  *)
+    print -u2 -- "Usage: ${0:t} [release|debug] [development|adhoc]"
+    exit 2
+    ;;
 esac
 
 stage_root="$(mktemp -d /private/tmp/hubris-voice-bundle.XXXXXX)"

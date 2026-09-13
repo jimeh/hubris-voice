@@ -7,6 +7,7 @@ info_plist="${repo_dir}/Support/Info.plist"
 entitlements="${repo_dir}/Support/HubrisVoice.entitlements"
 release_config="${repo_dir}/.github/release-please-config.json"
 release_github_script="${repo_dir}/Scripts/release-github.sh"
+release_macos_script="${repo_dir}/Scripts/release-macos.sh"
 test_count=0
 
 assert_equal() {
@@ -43,8 +44,7 @@ for sparkle_key in \
   SUFeedURL \
   SUPublicEDKey \
   SURequireSignedFeed \
-  SUVerifyUpdateBeforeExtraction
-do
+  SUVerifyUpdateBeforeExtraction; do
   assert_absent "development bundle stays Sparkle-free" "${sparkle_key}" "${info_plist}"
 done
 
@@ -64,6 +64,10 @@ assert_absent \
   "draft operations avoid the published-release tag endpoint" \
   '/releases/tags/' \
   "${release_github_script}"
+assert_absent \
+  "notarization avoids the read-only zsh status parameter" \
+  '^[[:space:]]*local status([[:space:]]|$)' \
+  "${release_macos_script}"
 assert_equal \
   "release entitlement count" \
   1 \
@@ -89,8 +93,7 @@ RELEASE_SHA="${current_sha}" \
 ((test_count += 1))
 
 if RELEASE_SHA="${current_sha}" RELEASE_VERSION=invalid \
-  "${repo_dir}/Scripts/release-macos.sh" validate-source >/dev/null 2>&1
-then
+  "${repo_dir}/Scripts/release-macos.sh" validate-source >/dev/null 2>&1; then
   print -u2 -- "release source validation accepted a malformed version"
   exit 1
 fi

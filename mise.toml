@@ -11,6 +11,8 @@ lefthook = "latest"
 pinact = "latest"
 "pipx:spdx-tools" = "latest"
 ripgrep = "latest"
+shellcheck = "latest"
+shfmt = "latest"
 syft = "latest"
 swiftformat = "latest"
 swiftlint = "latest"
@@ -70,13 +72,18 @@ SPARKLE_PUBLIC_KEY_FILE="$PWD/Tests/Fixtures/SparklePublicKey" \
 '''
 
 [tasks.format]
-description = "Format Swift and TOML files"
-run = ["swiftformat Package.swift Sources Tests", "taplo format mise.toml"]
+description = "Format Swift, zsh, and TOML files"
+run = [
+  "swiftformat Package.swift Sources Tests",
+  "shfmt --language-dialect zsh --indent 2 --binary-next-line --case-indent --write Scripts/*.sh Tests/*.sh",
+  "taplo format mise.toml",
+]
 
 [tasks."format:check"]
-description = "Check Swift and TOML formatting without changing files"
+description = "Check Swift, zsh, and TOML formatting without changing files"
 run = [
   "swiftformat --lint Package.swift Sources Tests",
+  "shfmt --language-dialect zsh --indent 2 --binary-next-line --case-indent --diff Scripts/*.sh Tests/*.sh",
   "taplo format --check mise.toml",
 ]
 
@@ -95,7 +102,7 @@ run = "./Scripts/lint-architecture.sh"
 [tasks."lint:workflows"]
 description = "Validate GitHub Actions syntax, security, and SHA pins"
 run = [
-  "actionlint",
+  "actionlint -shellcheck shellcheck",
   "zizmor --offline .github/workflows",
   "pinact run -fix=false -no-api",
 ]
