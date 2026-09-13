@@ -98,8 +98,9 @@ prompts happen only when their Request buttons are clicked. It connects to
 OpenAI automatically on later launches when an API key is already stored, and
 reconnects on its own after sleep or a network change.
 
-Other settings persist as soon as they change. Prompt, dictionary, and language
-edits reach the live session without a reconnect.
+Other settings persist as soon as they change. Prompt, dictionary, and non-empty
+language edits reach the live session without a reconnect. Clearing all language
+hints reconnects after active snippets finish.
 
 ## Development checks
 

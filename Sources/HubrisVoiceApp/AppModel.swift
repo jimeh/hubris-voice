@@ -255,6 +255,7 @@ final class AppModel: ObservableObject {
   private var finalizingTimers: [Int: Task<Void, Never>] = [:]
   private var eventTask: Task<Void, Never>?
   private let captureFinalizer = CaptureFinalizer()
+  private let insertionQueue = InsertionQueue()
   private var permissionPollingTask: Task<Void, Never>?
   private var transportTask: Task<Void, Never>?
   private var transportAttemptID: String?
@@ -1068,16 +1069,16 @@ final class AppModel: ObservableObject {
   }
 
   private func insert(generation: Int, text: String) {
-    let context = insertionService.captureFocusedTarget().map {
-      insertionService.currentTextContext(for: $0)
-    } ?? InsertionFormatter.Context(textBeforeCaret: nil, textAfterCaret: nil)
-    let formatted = InsertionFormatter.format(
-      text,
-      context: context,
-      options: insertionOptions
-    )
-    Task { [weak self] in
+    insertionQueue.enqueue { [weak self] in
       guard let self else { return }
+      let context = insertionService.captureFocusedTarget().map {
+        insertionService.currentTextContext(for: $0)
+      } ?? InsertionFormatter.Context(textBeforeCaret: nil, textAfterCaret: nil)
+      let formatted = InsertionFormatter.format(
+        text,
+        context: context,
+        options: insertionOptions
+      )
       let result = await insertionService.insert(formatted, expected: formatted)
       apply(.insertionFinished(generation: generation, outcome: result.outcome, reason: result.reason))
     }
