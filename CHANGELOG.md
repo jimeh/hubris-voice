@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/jimeh/hubris-voice/compare/v0.1.1...v0.1.2) (2026-09-13)
+
+
+### Bug Fixes
+
+* use dev.jimeh application bundle identifier ([#9](https://github.com/jimeh/hubris-voice/issues/9)) ([6bf2d6d](https://github.com/jimeh/hubris-voice/commit/6bf2d6df96b879e700f8a41cbc1c4b1a9ea1dc46))
+
 ## [0.1.1](https://github.com/jimeh/hubris-voice/compare/v0.1.0...v0.1.1) (2026-09-13)
 
 
