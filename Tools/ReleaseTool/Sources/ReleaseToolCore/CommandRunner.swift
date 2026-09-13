@@ -49,20 +49,18 @@ public struct SystemCommandRunner: CommandRunning {
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     process.arguments = [invocation.executable] + invocation.arguments
 
-    let standardOutputPipe: Pipe?
-    let standardErrorPipe: Pipe?
+    let capture: CommandCapture?
     switch invocation.outputMode {
     case .captured:
-      standardOutputPipe = Pipe()
-      standardErrorPipe = Pipe()
-      process.standardOutput = standardOutputPipe
-      process.standardError = standardErrorPipe
+      capture = try CommandCapture()
+      process.standardOutput = capture?.standardOutputHandle
+      process.standardError = capture?.standardErrorHandle
     case .inherited:
-      standardOutputPipe = nil
-      standardErrorPipe = nil
+      capture = nil
       process.standardOutput = FileHandle.standardOutput
       process.standardError = FileHandle.standardError
     }
+    defer { capture?.cleanup() }
 
     let standardInputPipe: Pipe?
     if invocation.standardInput != nil {
@@ -85,8 +83,9 @@ public struct SystemCommandRunner: CommandRunning {
     }
 
     process.waitUntilExit()
-    let standardOutput = try read(standardOutputPipe)
-    let standardError = try read(standardErrorPipe)
+    try capture?.close()
+    let standardOutput = try capture?.standardOutput() ?? ""
+    let standardError = try capture?.standardError() ?? ""
     guard process.terminationReason == .exit, process.terminationStatus == 0 else {
       let diagnostic = [standardOutput, standardError]
         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -99,12 +98,63 @@ public struct SystemCommandRunner: CommandRunning {
     }
     return CommandOutput(standardOutput: standardOutput, standardError: standardError)
   }
+}
 
-  private func read(_ pipe: Pipe?) throws -> String {
-    guard let pipe else {
-      return ""
+private final class CommandCapture {
+  let standardOutputHandle: FileHandle
+  let standardErrorHandle: FileHandle
+
+  private let directory: URL
+  private let standardOutputURL: URL
+  private let standardErrorURL: URL
+
+  init() throws {
+    directory = FileManager.default.temporaryDirectory
+      .appending(path: "hubris-release-command.\(UUID().uuidString)")
+    standardOutputURL = directory.appending(path: "stdout")
+    standardErrorURL = directory.appending(path: "stderr")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    do {
+      try Data().write(to: standardOutputURL)
+      try Data().write(to: standardErrorURL)
+      standardOutputHandle = try FileHandle(forWritingTo: standardOutputURL)
+      standardErrorHandle = try FileHandle(forWritingTo: standardErrorURL)
+    } catch {
+      try? FileManager.default.removeItem(at: directory)
+      throw error
     }
-    let data = try pipe.fileHandleForReading.readToEnd() ?? Data()
+  }
+
+  func close() throws {
+    var firstError: Error?
+    for handle in [standardOutputHandle, standardErrorHandle] {
+      do {
+        try handle.close()
+      } catch {
+        firstError = firstError ?? error
+      }
+    }
+    if let firstError {
+      throw firstError
+    }
+  }
+
+  func standardOutput() throws -> String {
+    try read(standardOutputURL)
+  }
+
+  func standardError() throws -> String {
+    try read(standardErrorURL)
+  }
+
+  func cleanup() {
+    try? standardOutputHandle.close()
+    try? standardErrorHandle.close()
+    try? FileManager.default.removeItem(at: directory)
+  }
+
+  private func read(_ source: URL) throws -> String {
+    let data = try Data(contentsOf: source)
     guard let value = String(data: data, encoding: .utf8) else {
       throw ReleaseToolError.message("Command output was not valid UTF-8")
     }

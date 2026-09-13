@@ -3,6 +3,19 @@ import Foundation
 import XCTest
 
 final class ReleaseConfigurationTests: XCTestCase {
+  func testSystemRunnerCapturesOutputLargerThanAPipeBuffer() throws {
+    let output = try SystemCommandRunner().run(
+      CommandInvocation(
+        "awk",
+        ["BEGIN { for (i = 0; i < 20000; i++) print \"captured-output\" }"],
+        outputMode: .captured
+      )
+    )
+
+    XCTAssertEqual(output.standardOutput.split(separator: "\n").count, 20_000)
+    XCTAssertTrue(output.standardError.isEmpty)
+  }
+
   func testSigningConfigurationRejectsMissingP12BeforeBuildWork() throws {
     let fixture = try RepositoryFixture()
     defer { fixture.cleanup() }
