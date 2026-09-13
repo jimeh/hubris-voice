@@ -38,8 +38,7 @@ assert_fails() {
   local input="$2"
 
   if env -u HUBRIS_VOICE_SIGNING_IDENTITY \
-    "${resolver}" --stdin <<<"${input}" >/dev/null 2>&1
-  then
+    "${resolver}" --stdin <<<"${input}" >/dev/null 2>&1; then
     print -u2 -- "${label}: expected resolver to fail"
     return 1
   fi

@@ -15,13 +15,13 @@ usage() {
 }
 
 case "${1:-}" in
-"") ;;
-"--check") check_only=true ;;
-"--manifest-only") manifest_only=true ;;
-*)
-  usage
-  exit 2
-  ;;
+  "") ;;
+  "--check") check_only=true ;;
+  "--manifest-only") manifest_only=true ;;
+  *)
+    usage
+    exit 2
+    ;;
 esac
 
 manifest_value() {
@@ -48,29 +48,27 @@ generate_keys_sha256="$(manifest_value tools.generate_keys_sha256)"
 sign_update_sha256="$(manifest_value tools.sign_update_sha256)"
 license_url="$(manifest_value license_url)"
 
-if [[ ! "${version}" =~ '^[0-9]+\.[0-9]+\.[0-9]+$' ]] ||
-  [[ ! "${published_at}" =~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T' ]] ||
-  [[ ! "${minimum_macos}" =~ '^[0-9]+\.[0-9]+(\.[0-9]+)?$' ]] ||
-  [[ ! "${archive_name}" =~ '^Sparkle-[A-Za-z0-9._-]+\.tar\.xz$' ]] ||
-  [[ ! "${archive_sha256}" =~ '^[0-9a-f]{64}$' ]] ||
-  [[ ! "${license_sha256}" =~ '^[0-9a-f]{64}$' ]] ||
-  [[ ! "${framework_sha256}" =~ '^[0-9a-f]{64}$' ]] ||
-  [[ ! "${autoupdate_sha256}" =~ '^[0-9a-f]{64}$' ]] ||
-  [[ ! "${updater_sha256}" =~ '^[0-9a-f]{64}$' ]] ||
-  [[ ! "${generate_appcast_sha256}" =~ '^[0-9a-f]{64}$' ]] ||
-  [[ ! "${generate_keys_sha256}" =~ '^[0-9a-f]{64}$' ]] ||
-  [[ ! "${sign_update_sha256}" =~ '^[0-9a-f]{64}$' ]]
-then
+if [[ ! "${version}" =~ '^[0-9]+\.[0-9]+\.[0-9]+$' ]] \
+  || [[ ! "${published_at}" =~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T' ]] \
+  || [[ ! "${minimum_macos}" =~ '^[0-9]+\.[0-9]+(\.[0-9]+)?$' ]] \
+  || [[ ! "${archive_name}" =~ '^Sparkle-[A-Za-z0-9._-]+\.tar\.xz$' ]] \
+  || [[ ! "${archive_sha256}" =~ '^[0-9a-f]{64}$' ]] \
+  || [[ ! "${license_sha256}" =~ '^[0-9a-f]{64}$' ]] \
+  || [[ ! "${framework_sha256}" =~ '^[0-9a-f]{64}$' ]] \
+  || [[ ! "${autoupdate_sha256}" =~ '^[0-9a-f]{64}$' ]] \
+  || [[ ! "${updater_sha256}" =~ '^[0-9a-f]{64}$' ]] \
+  || [[ ! "${generate_appcast_sha256}" =~ '^[0-9a-f]{64}$' ]] \
+  || [[ ! "${generate_keys_sha256}" =~ '^[0-9a-f]{64}$' ]] \
+  || [[ ! "${sign_update_sha256}" =~ '^[0-9a-f]{64}$' ]]; then
   print -u2 -- "Sparkle source manifest contains malformed values"
   exit 1
 fi
 
 expected_url="https://github.com/sparkle-project/Sparkle/releases/download/${version}/${archive_name}"
 expected_license_url="https://github.com/sparkle-project/Sparkle/blob/${version}/LICENSE"
-if [[ "${archive_url}" != "${expected_url}" ]] ||
-  [[ "${license_url}" != "${expected_license_url}" ]] ||
-  [[ "${framework_identifier}" != "org.sparkle-project.Sparkle" ]]
-then
+if [[ "${archive_url}" != "${expected_url}" ]] \
+  || [[ "${license_url}" != "${expected_license_url}" ]] \
+  || [[ "${framework_identifier}" != "org.sparkle-project.Sparkle" ]]; then
   print -u2 -- "Sparkle source manifest provenance is inconsistent"
   exit 1
 fi
@@ -93,8 +91,7 @@ verify_distribution() {
     "${distribution_dir}/bin/generate_appcast" \
     "${distribution_dir}/bin/generate_keys" \
     "${distribution_dir}/bin/sign_update" \
-    "${distribution_dir}/LICENSE"
-  do
+    "${distribution_dir}/LICENSE"; do
     if [[ ! -f "${required_file}" ]]; then
       print -u2 -- "Prepared Sparkle distribution is missing ${required_file}"
       return 1
@@ -104,17 +101,16 @@ verify_distribution() {
   actual_identifier="$(plutil -extract CFBundleIdentifier raw -o - "${info_plist}")"
   actual_version="$(plutil -extract CFBundleShortVersionString raw -o - "${info_plist}")"
   actual_minimum="$(plutil -extract LSMinimumSystemVersion raw -o - "${info_plist}")"
-  if [[ "${actual_identifier}" != "${framework_identifier}" ]] ||
-    [[ "${actual_version}" != "${version}" ]] ||
-    [[ "${actual_minimum}" != "${minimum_macos}" ]] ||
-    [[ "$(sha256_file "${distribution_dir}/LICENSE")" != "${license_sha256}" ]] ||
-    [[ "$(sha256_file "${framework_dir}/Versions/B/Sparkle")" != "${framework_sha256}" ]] ||
-    [[ "$(sha256_file "${framework_dir}/Versions/B/Autoupdate")" != "${autoupdate_sha256}" ]] ||
-    [[ "$(sha256_file "${framework_dir}/Versions/B/Updater.app/Contents/MacOS/Updater")" != "${updater_sha256}" ]] ||
-    [[ "$(sha256_file "${distribution_dir}/bin/generate_appcast")" != "${generate_appcast_sha256}" ]] ||
-    [[ "$(sha256_file "${distribution_dir}/bin/generate_keys")" != "${generate_keys_sha256}" ]] ||
-    [[ "$(sha256_file "${distribution_dir}/bin/sign_update")" != "${sign_update_sha256}" ]]
-  then
+  if [[ "${actual_identifier}" != "${framework_identifier}" ]] \
+    || [[ "${actual_version}" != "${version}" ]] \
+    || [[ "${actual_minimum}" != "${minimum_macos}" ]] \
+    || [[ "$(sha256_file "${distribution_dir}/LICENSE")" != "${license_sha256}" ]] \
+    || [[ "$(sha256_file "${framework_dir}/Versions/B/Sparkle")" != "${framework_sha256}" ]] \
+    || [[ "$(sha256_file "${framework_dir}/Versions/B/Autoupdate")" != "${autoupdate_sha256}" ]] \
+    || [[ "$(sha256_file "${framework_dir}/Versions/B/Updater.app/Contents/MacOS/Updater")" != "${updater_sha256}" ]] \
+    || [[ "$(sha256_file "${distribution_dir}/bin/generate_appcast")" != "${generate_appcast_sha256}" ]] \
+    || [[ "$(sha256_file "${distribution_dir}/bin/generate_keys")" != "${generate_keys_sha256}" ]] \
+    || [[ "$(sha256_file "${distribution_dir}/bin/sign_update")" != "${sign_update_sha256}" ]]; then
     print -u2 -- "Prepared Sparkle distribution does not match the pin"
     return 1
   fi
@@ -140,9 +136,8 @@ archives_dir="${sparkle_root}/archives"
 archive_file="${archives_dir}/${archive_name}"
 mkdir -p "${archives_dir}"
 
-if [[ -f "${archive_file}" ]] &&
-  [[ "$(sha256_file "${archive_file}")" != "${archive_sha256}" ]]
-then
+if [[ -f "${archive_file}" ]] \
+  && [[ "$(sha256_file "${archive_file}")" != "${archive_sha256}" ]]; then
   print -u2 -- "Cached Sparkle archive checksum does not match the pin"
   exit 1
 fi
