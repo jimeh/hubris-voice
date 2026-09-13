@@ -16,6 +16,7 @@ public struct OverlayPresentation: Equatable, Sendable {
   public let transcript: String
   public let message: String
   public let canCopy: Bool
+  public let canPasteHere: Bool
   public let canDismiss: Bool
   public let pendingCount: Int
 
@@ -24,6 +25,7 @@ public struct OverlayPresentation: Equatable, Sendable {
     transcript: String,
     message: String,
     canCopy: Bool,
+    canPasteHere: Bool,
     canDismiss: Bool,
     pendingCount: Int
   ) {
@@ -31,6 +33,7 @@ public struct OverlayPresentation: Equatable, Sendable {
     self.transcript = transcript
     self.message = message
     self.canCopy = canCopy
+    self.canPasteHere = canPasteHere
     self.canDismiss = canDismiss
     self.pendingCount = pendingCount
   }
@@ -76,6 +79,7 @@ public struct DictationSession: Equatable, Sendable {
     case cancelRequested
     case dismissRequested
     case copied
+    case pasteHereRequested
     case connectRequested(force: Bool)
     case credentialsChanged(hasKey: Bool)
     case localError(message: String)
@@ -107,6 +111,7 @@ public struct DictationSession: Equatable, Sendable {
     case scheduleFinalizingTimeout(generation: Int, after: Duration)
     case cancelFinalizingTimeout(generation: Int)
     case insert(generation: Int, text: String)
+    case insertAtCurrentFocus(generation: Int, text: String)
     case scheduleDismiss(after: Duration)
     case cancelDismiss
     case discardSnippet(generation: Int)
@@ -115,7 +120,7 @@ public struct DictationSession: Equatable, Sendable {
   public struct Configuration: Equatable, Sendable {
     public var minimumHoldDuration: TimeInterval
     public var finalizingTimeout: Duration
-    public var confirmedLinger: Duration
+    public var copiedLinger: Duration
     public var attentionLinger: Duration
     public var maximumPendingSnippets: Int
     public var reconnect: ReconnectPolicy
@@ -123,14 +128,14 @@ public struct DictationSession: Equatable, Sendable {
     public init(
       minimumHoldDuration: TimeInterval = 0.2,
       finalizingTimeout: Duration = .seconds(8),
-      confirmedLinger: Duration = .milliseconds(850),
+      copiedLinger: Duration = .milliseconds(850),
       attentionLinger: Duration = .seconds(4),
       maximumPendingSnippets: Int = 4,
       reconnect: ReconnectPolicy = .init()
     ) {
       self.minimumHoldDuration = minimumHoldDuration
       self.finalizingTimeout = finalizingTimeout
-      self.confirmedLinger = confirmedLinger
+      self.copiedLinger = copiedLinger
       self.attentionLinger = attentionLinger
       self.maximumPendingSnippets = maximumPendingSnippets
       self.reconnect = reconnect
@@ -182,6 +187,8 @@ public struct DictationSession: Equatable, Sendable {
       return dismissRequested()
     case .copied:
       return copied()
+    case .pasteHereRequested:
+      return pasteHereRequested()
     case .localError(let message):
       return localError(message: message)
     case .server(let serverEvent):
@@ -213,6 +220,7 @@ public struct DictationSession: Equatable, Sendable {
         transcript: listening.transcript,
         message: message,
         canCopy: false,
+        canPasteHere: false,
         canDismiss: false,
         pendingCount: pending.count
       )
@@ -224,6 +232,7 @@ public struct DictationSession: Equatable, Sendable {
         transcript: values.text,
         message: wasCopied ? "Copied to the clipboard" : values.message,
         canCopy: !values.text.isEmpty && !wasCopied,
+        canPasteHere: !wasCopied && values.mode == .attention && !values.text.isEmpty,
         canDismiss: true,
         pendingCount: pending.count
       )
@@ -236,6 +245,7 @@ public struct DictationSession: Equatable, Sendable {
         transcript: transcript,
         message: "Completing the transcript…",
         canCopy: false,
+        canPasteHere: false,
         canDismiss: false,
         pendingCount: pendingCount
       )
@@ -249,7 +259,7 @@ public struct DictationSession: Equatable, Sendable {
     }
     if let presented {
       switch presented {
-      case .confirmed: return "Pasted"
+      case .confirmed: break
       case .attempted: return "Paste attempted"
       case .rejected, .timedOut: return "Transcript ready"
       case .error: return "Needs attention"
@@ -430,7 +440,31 @@ private extension DictationSession {
     wasCopied = true
     return [
       .cancelDismiss,
-      .scheduleDismiss(after: configuration.confirmedLinger),
+      .scheduleDismiss(after: configuration.copiedLinger),
+    ]
+  }
+
+  mutating func pasteHereRequested() -> [Effect] {
+    guard let presented else { return [] }
+    let text: String
+    switch presented {
+    case .attempted(let attemptedText),
+         .rejected(let attemptedText, _),
+         .timedOut(let attemptedText):
+      text = attemptedText
+    case .confirmed, .error:
+      return []
+    }
+    guard !text.isEmpty else { return [] }
+
+    let generation = nextGeneration
+    nextGeneration += 1
+    inserting.append(Snippet(generation: generation, transcript: text))
+    self.presented = nil
+    wasCopied = false
+    return [
+      .cancelDismiss,
+      .insertAtCurrentFocus(generation: generation, text: text),
     ]
   }
 
@@ -546,8 +580,9 @@ private extension DictationSession {
     let dismissalEffects: [Effect]
     switch outcome {
     case .confirmed:
-      result = .confirmed(text: snippet.transcript)
-      dismissalEffects = [.cancelDismiss, .scheduleDismiss(after: configuration.confirmedLinger)]
+      presented = nil
+      wasCopied = false
+      return [.discardSnippet(generation: generation), .cancelDismiss]
     case .attempted:
       result = .attempted(text: snippet.transcript)
       dismissalEffects = [.cancelDismiss, .scheduleDismiss(after: configuration.attentionLinger)]

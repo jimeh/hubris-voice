@@ -32,6 +32,7 @@ final class PushToTalkMonitor: @unchecked Sendable {
   var onRelease: (@Sendable () -> Void)?
   var onCancel: (@Sendable () -> Void)?
   var onEscape: (@Sendable () -> Void)?
+  var onReturn: (@Sendable () -> Void)?
 
   var capturesEscape: Bool {
     get {
@@ -46,10 +47,24 @@ final class PushToTalkMonitor: @unchecked Sendable {
     }
   }
 
+  var capturesReturn: Bool {
+    get {
+      lock.lock()
+      defer { lock.unlock() }
+      return isCapturingReturn
+    }
+    set {
+      lock.lock()
+      isCapturingReturn = newValue
+      lock.unlock()
+    }
+  }
+
   private let shortcut: GlobalShortcut
   private let lock = NSLock()
   private var gesture: PushToTalkGesture
   private var isCapturingEscape = false
+  private var isCapturingReturn = false
   private var eventTap: CFMachPort?
   private var runLoopSource: CFRunLoopSource?
 
@@ -123,15 +138,21 @@ final class PushToTalkMonitor: @unchecked Sendable {
     let keyCode = UInt16(
       event.getIntegerValueField(.keyboardEventKeycode)
     )
-    if type == .keyDown, keyCode == 53, capturesEscape {
-      onEscape?()
-      return true
-    }
-    let modifiers = KeyModifiers(eventFlags: event.flags)
     let isRepeat =
       event.getIntegerValueField(
         .keyboardEventAutorepeat
       ) != 0
+    if type == .keyDown, keyCode == 53, capturesEscape {
+      onEscape?()
+      return true
+    }
+    if type == .keyDown, keyCode == 36, capturesReturn {
+      if !isRepeat {
+        onReturn?()
+      }
+      return true
+    }
+    let modifiers = KeyModifiers(eventFlags: event.flags)
     let action = withLockedGesture {
       $0.handle(
         isKeyDown: type == .keyDown,

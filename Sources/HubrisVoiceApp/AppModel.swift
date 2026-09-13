@@ -5,6 +5,9 @@ import HubrisVoiceCore
 import Network
 import SwiftUI
 
+// The effect interpreter and its platform integrations are intentionally kept together.
+// swiftlint:disable file_length type_body_length
+
 @MainActor
 final class AppModel: ObservableObject {
   @Published private(set) var phaseTitle: String
@@ -26,11 +29,30 @@ final class AppModel: ObservableObject {
     }
   }
 
+  @Published var smartLeadingSpace: Bool {
+    didSet {
+      defaults.set(smartLeadingSpace, forKey: DefaultsKey.smartLeadingSpace)
+    }
+  }
+
+  @Published var trailingSpace: Bool {
+    didSet {
+      defaults.set(trailingSpace, forKey: DefaultsKey.trailingSpace)
+    }
+  }
+
+  @Published var adjustCaseAfterComma: Bool {
+    didSet {
+      defaults.set(adjustCaseAfterComma, forKey: DefaultsKey.adjustCaseAfterComma)
+    }
+  }
+
   @Published private(set) var dictionaryWords: [String]
   @Published var newDictionaryWord = ""
   @Published private(set) var settingsMessage: String?
   @Published private(set) var microphonePermission: MicrophonePermission
   @Published private(set) var accessibilityTrusted: Bool
+  @Published private(set) var lastConfirmedAt: Date?
 
   let overlayModel = OverlayViewModel()
   weak var overlayController: OverlayController?
@@ -91,6 +113,7 @@ final class AppModel: ObservableObject {
   private var transportTask: Task<Void, Never>?
   private var wakeObserver: NSObjectProtocol?
   private var recordingStartedAt: Date?
+  private var releasedAt: [Int: Date] = [:]
   private var isStarted = false
   private var isShortcutRunning = false
 
@@ -104,9 +127,19 @@ final class AppModel: ObservableObject {
     overlayPlacement = defaults.string(
       forKey: DefaultsKey.overlayPlacement
     ).flatMap(OverlayPlacementPreference.init(rawValue:)) ?? .automatic
+    smartLeadingSpace = defaults.object(
+      forKey: DefaultsKey.smartLeadingSpace
+    ) as? Bool ?? true
+    trailingSpace = defaults.object(
+      forKey: DefaultsKey.trailingSpace
+    ) as? Bool ?? true
+    adjustCaseAfterComma = defaults.object(
+      forKey: DefaultsKey.adjustCaseAfterComma
+    ) as? Bool ?? false
     dictionaryWords = defaults.stringArray(forKey: DefaultsKey.dictionary) ?? []
     microphonePermission = PermissionService.microphone
     accessibilityTrusted = PermissionService.accessibilityTrusted
+    lastConfirmedAt = nil
     session = DictationSession(
       hasKey: !storedAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     )
@@ -134,6 +167,9 @@ final class AppModel: ObservableObject {
     }
     shortcutMonitor.onEscape = { [weak self] in
       Task { @MainActor [weak self] in self?.apply(.cancelRequested) }
+    }
+    shortcutMonitor.onReturn = { [weak self] in
+      Task { @MainActor [weak self] in self?.handleReturn() }
     }
   }
 
@@ -228,10 +264,45 @@ final class AppModel: ObservableObject {
     apply(.dismissRequested)
   }
 
+  func pasteHere() {
+    apply(.pasteHereRequested)
+  }
+
   private func apply(_ event: DictationSession.Event) {
+    let insertionTelemetry: InsertionTelemetry? =
+      if case .insertionFinished(let generation, let outcome, _) = event,
+      session.inserting.contains(where: { $0.generation == generation }) {
+        InsertionTelemetry(
+          outcome: outcome,
+          releasedAt: releasedAt[generation]
+        )
+      } else {
+        nil
+      }
+    if case .released = event, let generation = session.listening?.generation {
+      releasedAt[generation] = Date()
+    }
+    if case .bufferFull(let generation) = event,
+       session.listening?.generation == generation
+    {
+      releasedAt[generation] = Date()
+    }
     let effects = session.transition(event)
     for effect in effects {
       interpret(effect)
+    }
+    if let insertionTelemetry {
+      if insertionTelemetry.outcome == .confirmed {
+        lastConfirmedAt = Date()
+      }
+      if let releasedAt = insertionTelemetry.releasedAt {
+        let latency = max(0, Int(Date().timeIntervalSince(releasedAt) * 1_000))
+        Task {
+          await DiagnosticLog.shared.record(
+            "insert latency=\(latency) outcome=\(insertionTelemetry.outcome.diagnosticName)"
+          )
+        }
+      }
     }
     publishSessionState()
   }
@@ -259,6 +330,9 @@ final class AppModel: ObservableObject {
       scheduleFinalizingTimeout(generation: generation, delay: delay)
     case .cancelFinalizingTimeout(let generation): cancelFinalizingTimeout(generation: generation)
     case .insert(let generation, let text): insert(generation: generation, text: text)
+    case .insertAtCurrentFocus(let generation, let text):
+      releasedAt[generation] = Date()
+      insertAtCurrentFocus(generation: generation, text: text)
     case .scheduleDismiss(let delay):
       dismissScheduler.schedule(after: delay) { [weak self] in self?.apply(.dismissDelayElapsed) }
     case .cancelDismiss: dismissScheduler.cancel()
@@ -269,6 +343,7 @@ final class AppModel: ObservableObject {
   private func publishSessionState() {
     phaseTitle = session.phaseTitle
     shortcutMonitor.capturesEscape = session.presentation != nil
+    shortcutMonitor.capturesReturn = session.presentation?.mode == .attention
     if let presentation = session.presentation {
       overlayModel.apply(presentation)
       overlayController?.show(
@@ -299,6 +374,14 @@ final class AppModel: ObservableObject {
     let duration = Date().timeIntervalSince(recordingStartedAt)
     self.recordingStartedAt = nil
     apply(.released(heldDuration: duration))
+  }
+
+  private func handleReturn() {
+    if session.presentation?.canPasteHere == true {
+      apply(.pasteHereRequested)
+    } else {
+      copyResult()
+    }
   }
 
   private func handle(_ event: RealtimeTransportEvent) {
@@ -381,6 +464,7 @@ final class AppModel: ObservableObject {
   private func discardSnippet(generation: Int) {
     buffers.removeValue(forKey: generation)
     focus.removeValue(forKey: generation)
+    releasedAt.removeValue(forKey: generation)
     cancelFinalizingTimeout(generation: generation)
   }
 
@@ -389,11 +473,46 @@ final class AppModel: ObservableObject {
       apply(.insertionFinished(generation: generation, outcome: .rejected, reason: .noTarget))
       return
     }
+    let formatted = InsertionFormatter.format(
+      text,
+      context: insertionService.currentTextContext(for: target),
+      options: insertionOptions
+    )
     Task { [weak self] in
       guard let self else { return }
-      let result = await insertionService.paste(text, into: target)
+      let result = await insertionService.paste(
+        formatted,
+        into: target,
+        expected: formatted
+      )
       apply(.insertionFinished(generation: generation, outcome: result.outcome, reason: result.reason))
     }
+  }
+
+  private func insertAtCurrentFocus(generation: Int, text: String) {
+    guard let target = insertionService.captureFocusedTarget() else {
+      apply(.insertionFinished(generation: generation, outcome: .rejected, reason: .noTarget))
+      return
+    }
+    let formatted = InsertionFormatter.format(
+      text,
+      context: insertionService.currentTextContext(for: target),
+      options: insertionOptions
+    )
+    Task { [weak self] in
+      guard let self else { return }
+      let result = await insertionService.pasteAtCurrentFocus(formatted)
+      apply(.insertionFinished(generation: generation, outcome: result.outcome, reason: result.reason))
+    }
+  }
+
+  private var insertionOptions: InsertionFormatter.Options {
+    .init(
+      smartLeadingSpace: smartLeadingSpace,
+      trailingSpace: trailingSpace,
+      adjustCaseAfterComma: adjustCaseAfterComma,
+      protectedTerms: dictionaryWords
+    )
   }
 
   private func enqueueConnect() {
@@ -460,4 +579,24 @@ private enum DefaultsKey {
   static let prompt = "transcription.prompt"
   static let dictionary = "transcription.dictionary"
   static let overlayPlacement = "overlay.placement"
+  static let smartLeadingSpace = "insertion.smartLeadingSpace"
+  static let trailingSpace = "insertion.trailingSpace"
+  static let adjustCaseAfterComma = "insertion.adjustCaseAfterComma"
 }
+
+private extension PasteOutcome {
+  var diagnosticName: String {
+    switch self {
+    case .confirmed: "confirmed"
+    case .attempted: "attempted"
+    case .rejected: "rejected"
+    }
+  }
+}
+
+private struct InsertionTelemetry {
+  let outcome: PasteOutcome
+  let releasedAt: Date?
+}
+
+// swiftlint:enable file_length type_body_length

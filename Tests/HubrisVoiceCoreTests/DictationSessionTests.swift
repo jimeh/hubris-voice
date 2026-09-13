@@ -281,15 +281,8 @@ final class DictationSessionTests: XCTestCase {
     }
   }
 
-  func testInsertionOutcomesPresentCorrectMessagesAndLinger() {
+  func testUnconfirmedInsertionOutcomesPresentCorrectMessagesAndLinger() {
     let cases = [
-      InsertionCase(
-        outcome: .confirmed,
-        reason: nil,
-        mode: .completed,
-        message: "Inserted into the focused field",
-        effects: [.discardSnippet(generation: 0), .cancelDismiss, .scheduleDismiss(after: .milliseconds(850))]
-      ),
       InsertionCase(
         outcome: .attempted,
         reason: nil,
@@ -333,6 +326,59 @@ final class DictationSessionTests: XCTestCase {
     }
   }
 
+  func testConfirmedInsertionClearsPresentationWithoutLinger() {
+    var session = insertingSession(text: "hello")
+
+    XCTAssertEqual(
+      session.transition(.insertionFinished(generation: 0, outcome: .confirmed, reason: nil)),
+      [.discardSnippet(generation: 0), .cancelDismiss]
+    )
+    XCTAssertNil(session.presented)
+    XCTAssertNil(session.presentation)
+  }
+
+  func testPasteHereFromRejectedStartsFreshInsertionAndClearsPresentation() {
+    var session = sessionPresenting(.rejected(text: "hello", reason: .focusChanged))
+
+    XCTAssertEqual(
+      session.transition(.pasteHereRequested),
+      [.cancelDismiss, .insertAtCurrentFocus(generation: 1, text: "hello")]
+    )
+    XCTAssertEqual(session.inserting, [.init(generation: 1, transcript: "hello")])
+    XCTAssertNil(session.presented)
+    XCTAssertEqual(session.transition(.pasteHereRequested), [])
+  }
+
+  func testPasteHereWhileListeningIsIgnored() {
+    var session = readySession()
+    _ = session.transition(.pressed)
+
+    XCTAssertEqual(session.transition(.pasteHereRequested), [])
+    XCTAssertEqual(session.listening?.generation, 0)
+    XCTAssertTrue(session.inserting.isEmpty)
+  }
+
+  func testAttentionPresentationWithTextCanPasteHere() {
+    let session = sessionPresenting(.rejected(text: "hello", reason: .focusChanged))
+
+    XCTAssertEqual(session.presentation?.mode, .attention)
+    XCTAssertEqual(session.presentation?.canPasteHere, true)
+  }
+
+  func testRecoveryGenerationCanOnlyFinishOnce() {
+    var session = sessionPresenting(.attempted(text: "hello"))
+    _ = session.transition(.pasteHereRequested)
+
+    XCTAssertEqual(
+      session.transition(.insertionFinished(generation: 1, outcome: .confirmed, reason: nil)),
+      [.discardSnippet(generation: 1), .cancelDismiss]
+    )
+    XCTAssertEqual(
+      session.transition(.insertionFinished(generation: 1, outcome: .confirmed, reason: nil)),
+      []
+    )
+  }
+
   func testStaleInsertionCompletionCannotReplacePresentation() {
     var session = insertingSession(text: "hello")
 
@@ -366,7 +412,6 @@ private struct InsertionCase {
 private extension DictationSessionTests {
   var presentedResults: [DictationSession.PresentedResult] {
     [
-      .confirmed(text: "text"),
       .attempted(text: "text"),
       .rejected(text: "text", reason: .noTarget),
       .timedOut(text: "text"),

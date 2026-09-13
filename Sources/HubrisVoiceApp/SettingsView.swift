@@ -10,6 +10,7 @@ struct SettingsView: View {
       VStack(alignment: .leading, spacing: 24) {
         statusHeader
         shortcutSection
+        insertionSection
         credentialsSection
         dictionarySection
         promptSection
@@ -21,6 +22,16 @@ struct SettingsView: View {
     .background(Color(nsColor: .windowBackgroundColor))
     .onAppear {
       model.refreshPermissions()
+    }
+  }
+
+  private var insertionSection: some View {
+    settingSection(title: "Insertion") {
+      VStack(alignment: .leading, spacing: 12) {
+        Toggle("Smart leading space", isOn: $model.smartLeadingSpace)
+        Toggle("Trailing space", isOn: $model.trailingSpace)
+        Toggle("Adjust case after commas", isOn: $model.adjustCaseAfterComma)
+      }
     }
   }
 

@@ -7,6 +7,7 @@ final class OverlayControllerTests: XCTestCase {
     let model = OverlayViewModel()
     let controller = OverlayController(
       model: model,
+      onPasteHere: {},
       onCopy: {},
       onDismiss: {}
     )

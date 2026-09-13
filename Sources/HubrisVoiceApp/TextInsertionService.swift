@@ -109,19 +109,77 @@ final class TextInsertionService {
     return nil
   }
 
-  // swiftlint:disable:next function_body_length
-  func paste(_ text: String, into target: CapturedFocus) async
-    -> PasteResult
-  {
+  func currentTextContext(
+    for focus: CapturedFocus
+  ) -> InsertionFormatter.Context {
     guard
-      let current = captureFocusedTarget()
+      let element = focus.element,
+      let state = accessibleTextState(for: element),
+      let value = state.value,
+      let location = state.selectionLocation
     else {
+      return .init(textBeforeCaret: nil, textAfterCaret: nil)
+    }
+    let selectionLength = state.selectionLength ?? 0
+    guard
+      location >= 0,
+      selectionLength >= 0,
+      location <= value.utf16.count,
+      selectionLength <= value.utf16.count - location,
+      let caretIndex = stringIndex(utf16Offset: location, in: value),
+      let selectionEndIndex = stringIndex(
+        utf16Offset: location + selectionLength,
+        in: value
+      )
+    else {
+      return .init(textBeforeCaret: nil, textAfterCaret: nil)
+    }
+    return .init(
+      textBeforeCaret: String(value[..<caretIndex]),
+      textAfterCaret: String(value[selectionEndIndex...])
+    )
+  }
+
+  func paste(
+    _ text: String,
+    into target: CapturedFocus,
+    expected: String
+  ) async -> PasteResult {
+    guard let current = captureFocusedTarget() else {
       return PasteResult(
         outcome: .rejected,
         reason: target.snapshot.isSecure ? .secureField : .focusChanged
       )
     }
+    return await pasteUsingClipboard(
+      text,
+      target: target,
+      current: current,
+      expected: expected
+    )
+  }
 
+  func pasteAtCurrentFocus(_ text: String) async -> PasteResult {
+    guard let current = captureFocusedTarget() else {
+      return PasteResult(outcome: .rejected, reason: .noTarget)
+    }
+    guard !current.snapshot.isSecure else {
+      return PasteResult(outcome: .rejected, reason: .secureField)
+    }
+    return await pasteUsingClipboard(
+      text,
+      target: current,
+      current: current,
+      expected: text
+    )
+  }
+
+  private func pasteUsingClipboard(
+    _ text: String,
+    target: CapturedFocus,
+    current: CapturedFocus,
+    expected: String
+  ) async -> PasteResult {
     let decision = PasteSafety.decision(
       captured: target.snapshot,
       current: current.snapshot
@@ -175,7 +233,7 @@ final class TextInsertionService {
     keyUp.post(tap: .cghidEventTap)
 
     Task { @MainActor in
-      try? await Task.sleep(for: .milliseconds(700))
+      try? await Task.sleep(for: .milliseconds(1_500))
       if pasteboard.changeCount == dictatedChangeCount {
         previousContents.restore(to: pasteboard)
       }
@@ -186,7 +244,8 @@ final class TextInsertionService {
     return PasteResult(
       outcome: PasteConfirmation.outcome(
         before: beforeState,
-        after: afterState
+        after: afterState,
+        expected: expected
       ),
       reason: nil
     )
@@ -407,6 +466,17 @@ final class TextInsertionService {
       selectionLocation: selection?.location,
       selectionLength: selection?.length
     )
+  }
+
+  private func stringIndex(
+    utf16Offset: Int,
+    in value: String
+  ) -> String.Index? {
+    let utf16Index = value.utf16.index(
+      value.utf16.startIndex,
+      offsetBy: utf16Offset
+    )
+    return String.Index(utf16Index, within: value)
   }
 
   private func token(

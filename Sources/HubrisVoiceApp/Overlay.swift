@@ -45,6 +45,7 @@ final class OverlayViewModel: ObservableObject {
   @Published var elapsed: TimeInterval = 0
   @Published var levels: [Float] = Array(repeating: 0.08, count: 22)
   @Published var canCopy = false
+  @Published var canPasteHere = false
   @Published var canDismiss = false
   @Published var pendingCount = 0
 
@@ -59,6 +60,7 @@ final class OverlayViewModel: ObservableObject {
     elapsed = 0
     levels = Array(repeating: 0.08, count: 22)
     canCopy = false
+    canPasteHere = false
     canDismiss = false
     pendingCount = 0
   }
@@ -74,6 +76,7 @@ final class OverlayViewModel: ObservableObject {
     transcript = presentation.transcript
     message = presentation.message
     canCopy = presentation.canCopy
+    canPasteHere = presentation.canPasteHere
     canDismiss = presentation.canDismiss
     pendingCount = presentation.pendingCount
   }
@@ -104,6 +107,7 @@ final class OverlayController {
 
   init(
     model: OverlayViewModel,
+    onPasteHere: @escaping () -> Void,
     onCopy: @escaping () -> Void,
     onDismiss: @escaping () -> Void
   ) {
@@ -111,6 +115,7 @@ final class OverlayController {
     hostingView = NSHostingView(
       rootView: OverlayView(
         model: model,
+        onPasteHere: onPasteHere,
         onCopy: onCopy,
         onDismiss: onDismiss
       )
@@ -232,6 +237,7 @@ private extension NSPoint {
 
 private struct OverlayView: View {
   @ObservedObject var model: OverlayViewModel
+  let onPasteHere: () -> Void
   let onCopy: () -> Void
   let onDismiss: () -> Void
 
@@ -298,6 +304,11 @@ private struct OverlayView: View {
           .font(.system(size: 11, weight: .regular))
           .foregroundStyle(Color.fog.opacity(0.58))
         Spacer()
+        if model.canPasteHere {
+          Button("Paste here", action: onPasteHere)
+            .buttonStyle(.borderedProminent)
+            .tint(model.mode.color)
+        }
         if model.canCopy {
           Button("Copy", action: onCopy)
             .buttonStyle(.borderedProminent)

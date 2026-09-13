@@ -82,6 +82,7 @@ public struct DictationSession: Equatable, Sendable {
     case cancelRequested              // Escape, tap disable
     case dismissRequested             // Dismiss button, Escape while presenting
     case copied                       // Copy button pressed
+    case pasteHereRequested           // Return while a recoverable result is presented
     case connectRequested(force: Bool)
     case credentialsChanged(hasKey: Bool)
     case localError(message: String)  // permission or capture failures from the app
@@ -112,6 +113,7 @@ public struct DictationSession: Equatable, Sendable {
     case scheduleFinalizingTimeout(generation: Int, after: Duration)
     case cancelFinalizingTimeout(generation: Int)
     case insert(generation: Int, text: String)
+    case insertAtCurrentFocus(generation: Int, text: String)
     case scheduleDismiss(after: Duration)
     case cancelDismiss
     case discardSnippet(generation: Int)     // release captured focus and buffer
@@ -120,7 +122,7 @@ public struct DictationSession: Equatable, Sendable {
   public struct Configuration: Equatable, Sendable {
     public var minimumHoldDuration: TimeInterval = 0.2
     public var finalizingTimeout: Duration = .seconds(8)
-    public var confirmedLinger: Duration = .milliseconds(850)
+    public var copiedLinger: Duration = .milliseconds(850)
     public var attentionLinger: Duration = .seconds(4)
     public var maximumPendingSnippets: Int = 4
     public var reconnect: ReconnectPolicy = .init()
@@ -150,6 +152,7 @@ public struct OverlayPresentation: Equatable, Sendable {
   public let transcript: String
   public let message: String
   public let canCopy: Bool
+  public let canPasteHere: Bool     // true for non-empty attention results
   public let canDismiss: Bool       // true for every mode except listening and finalizing
   public let pendingCount: Int      // snippets still finalizing behind the visible one
 }
@@ -167,13 +170,13 @@ Derivation, first match wins:
    copy instead" / "No target app was captured · copy instead" / "Secure field
    · copy instead", "No result arrived · copy what was heard", and the error
    message. `canCopy` is true when the text is non-empty. `canDismiss` is
-   always true.
+   always true. `canPasteHere` is true for non-empty attention results.
 3. `pending` or `inserting` non-empty: mode `finalizing`, transcript from the
    newest pending snippet, message "Completing the transcript…".
 4. Otherwise nil.
 
 `phaseTitle`: "Add an API key", "Connecting", "Reconnecting", "Ready",
-"Listening", "Finalizing", "Pasted", "Paste attempted", "Transcript ready",
+"Listening", "Finalizing", "Paste attempted", "Transcript ready",
 "Needs attention", in that priority from the same state.
 
 ### Transition table
@@ -229,7 +232,8 @@ Snippet events:
 | `cancelRequested` | only pending snippets | `pending = []` | `cancelFinalizingTimeout(g)` and `discardSnippet(g)` for each |
 | `cancelRequested` | nothing active | unchanged | none |
 | `dismissRequested` | `presented != nil` | `presented = nil` | `cancelDismiss` |
-| `copied` | `presented` has text | `presented` stays but mode becomes `copied` (track with a flag) | `cancelDismiss`, `scheduleDismiss(confirmedLinger)` |
+| `copied` | `presented` has text | `presented` stays but mode becomes `copied` (track with a flag) | `cancelDismiss`, `scheduleDismiss(copiedLinger)` |
+| `pasteHereRequested` | `presented` is non-empty `.attempted`, `.rejected`, or `.timedOut` | allocate a new generation, move its text to `inserting`, clear `presented` | `cancelDismiss`, `insertAtCurrentFocus(g, text)` |
 | `localError(m)` | `listening != nil` | `listening = nil`, `presented = .error(m, transcript)` | `stopCapture`, `clearAudio(g)`, `discardSnippet(g)`, `scheduleDismiss(attentionLinger)` if transcript empty |
 | `localError(m)` | otherwise | `presented = .error(m, "")` | `scheduleDismiss(attentionLinger)` |
 | `server(.inputCommitted(id))` | first pending snippet with `itemID == nil` exists | that snippet gets `itemID` | none |
@@ -240,7 +244,7 @@ Snippet events:
 | `server(.error(m))` | any snippet live | `presented = .error(m, newest transcript)`; listening snippet cancelled as `cancelRequested`; pending snippets untouched | as `cancelRequested` for the listening snippet, `scheduleDismiss(attentionLinger)` if text empty |
 | `server(.error(m))` | nothing live | `presented = .error(m, "")` | `scheduleDismiss(attentionLinger)` |
 | `finalizingTimedOut(g)` | pending snippet `g` | remove, `presented = .timedOut(transcript)` | `clearAudio(g)`, `discardSnippet(g)`; `scheduleDismiss(attentionLinger)` only if transcript empty |
-| `insertionFinished(g, .confirmed)` | inserting `g` | remove, `presented = .confirmed(text)` | `discardSnippet(g)`, `cancelDismiss`, `scheduleDismiss(confirmedLinger)` |
+| `insertionFinished(g, .confirmed)` | inserting `g` | remove, `presented = nil` | `discardSnippet(g)`, `cancelDismiss` |
 | `insertionFinished(g, .attempted)` | inserting `g` | remove, `presented = .attempted(text)` | `discardSnippet(g)`, `cancelDismiss`, `scheduleDismiss(attentionLinger)` |
 | `insertionFinished(g, .rejected, reason)` | inserting `g` | remove, `presented = .rejected(text, reason)` | `discardSnippet(g)`, `cancelDismiss` |
 
@@ -437,8 +441,8 @@ Cancellation and presentation:
     non-empty.
 19. Every `PresentedResult` yields `canDismiss == true`, and
     `dismissRequested` clears it.
-20. `insertionFinished` for confirmed, attempted, and rejected produce the
-    expected presentation, linger, and reason messages.
+20. `insertionFinished` for confirmed hides immediately; attempted and
+    rejected produce the expected presentation, linger, and reason messages.
 21. `insertionFinished` for a generation that is not inserting is ignored.
 22. `presentation` while listening reports `pendingCount` and the
     connection-dependent message.

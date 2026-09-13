@@ -14,6 +14,9 @@ final class AppEnvironment {
     self.model = model
     overlay = OverlayController(
       model: model.overlayModel,
+      onPasteHere: { [weak model] in
+        model?.pasteHere()
+      },
       onCopy: { [weak model] in
         model?.copyResult()
       },

@@ -178,9 +178,43 @@ public struct AccessibleTextState: Equatable, Sendable {
 public enum PasteConfirmation {
   public static func outcome(
     before: AccessibleTextState?,
-    after: AccessibleTextState?
+    after: AccessibleTextState?,
+    expected: String
   ) -> PasteOutcome {
-    guard let before, let after, before != after else {
+    guard
+      let before,
+      let after,
+      let beforeValue = before.value,
+      let afterValue = after.value
+    else {
+      return .attempted
+    }
+
+    let beforeUTF16 = Array(beforeValue.utf16)
+    let afterUTF16 = Array(afterValue.utf16)
+    let expectedUTF16 = Array(expected.utf16)
+    if let location = before.selectionLocation {
+      let selectionLength = before.selectionLength ?? 0
+      guard
+        location >= 0,
+        selectionLength >= 0,
+        location <= beforeUTF16.count,
+        selectionLength <= beforeUTF16.count - location,
+        location <= afterUTF16.count,
+        expectedUTF16.count <= afterUTF16.count - location,
+        afterUTF16.count == beforeUTF16.count - selectionLength + expectedUTF16.count
+      else {
+        return .attempted
+      }
+      return Array(afterUTF16[location ..< location + expectedUTF16.count]) == expectedUTF16
+        ? .confirmed
+        : .attempted
+    }
+
+    guard
+      afterUTF16.count == beforeUTF16.count + expectedUTF16.count,
+      afterValue.contains(expected)
+    else {
       return .attempted
     }
     return .confirmed

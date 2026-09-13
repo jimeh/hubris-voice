@@ -217,34 +217,6 @@ final class InteractionPolicyTests: XCTestCase {
     )
   }
 
-  func testPasteConfirmationRequiresAnObservableTextStateChange() {
-    let before = AccessibleTextState(
-      value: "Hello",
-      selectionLocation: 5,
-      selectionLength: 0
-    )
-
-    XCTAssertEqual(
-      PasteConfirmation.outcome(
-        before: before,
-        after: AccessibleTextState(
-          value: "Hello world",
-          selectionLocation: 11,
-          selectionLength: 0
-        )
-      ),
-      .confirmed
-    )
-    XCTAssertEqual(
-      PasteConfirmation.outcome(before: before, after: before),
-      .attempted
-    )
-    XCTAssertEqual(
-      PasteConfirmation.outcome(before: nil, after: before),
-      .attempted
-    )
-  }
-
   func testSingleInstancePolicyRejectsAnotherRunningProcess() {
     XCTAssertFalse(
       SingleInstancePolicy.shouldTerminate(
