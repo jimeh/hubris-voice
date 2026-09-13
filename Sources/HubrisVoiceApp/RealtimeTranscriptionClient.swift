@@ -1,15 +1,29 @@
 import Foundation
 import HubrisVoiceCore
 
-private enum RealtimeOutboundAction: Sendable {
-  case append(Data)
-  case commit(String)
-  case clear
+private struct RealtimeOutboundAction: Sendable {
+  enum Payload: Sendable {
+    case append(Data)
+    case commit(String)
+    case clear
+  }
+
+  let attemptID: String?
+  let payload: Payload
 }
 
-enum RealtimeTransportEvent: Equatable, Sendable {
-  case server(RealtimeServerEvent)
-  case connectionLost(message: String)
+struct RealtimeTransportEvent: Equatable, Sendable {
+  enum Payload: Equatable, Sendable {
+    case server(RealtimeServerEvent)
+    case connectionLost(message: String)
+  }
+
+  let attemptID: String
+  let payload: Payload
+
+  func belongsTo(_ currentAttemptID: String?) -> Bool {
+    attemptID == currentAttemptID
+  }
 }
 
 private final class RealtimeWebSocketDelegate:
@@ -144,24 +158,39 @@ final class RealtimeOutboundPipe: @unchecked Sendable {
     self.continuation = continuation
   }
 
+  private let lock = NSLock()
+  private var attemptID: String?
+
+  func setAttempt(_ attemptID: String?) {
+    lock.lock()
+    defer { lock.unlock() }
+    self.attemptID = attemptID
+  }
+
+  private func enqueue(_ payload: RealtimeOutboundAction.Payload) {
+    lock.lock()
+    defer { lock.unlock() }
+    continuation.yield(RealtimeOutboundAction(attemptID: attemptID, payload: payload))
+  }
+
   func appendAudio(_ data: Data) {
-    continuation.yield(.append(data))
+    enqueue(.append(data))
   }
 
   @discardableResult
   func commitAudio() -> String {
     let eventID = UUID().uuidString
-    continuation.yield(.commit(eventID))
+    enqueue(.commit(eventID))
     return eventID
   }
 
   func clearAudio() {
-    continuation.yield(.clear)
+    enqueue(.clear)
   }
 
   func replay(_ chunks: [Data]) {
     for chunk in chunks {
-      continuation.yield(.append(chunk))
+      enqueue(.append(chunk))
     }
   }
 }
@@ -228,17 +257,18 @@ actor RealtimeTranscriptionClient {
   // swiftlint:disable:next function_body_length
   func connect(
     apiKey: String,
-    configuration: RealtimeSessionConfiguration
+    configuration: RealtimeSessionConfiguration,
+    attemptID: String
   ) async throws {
     start()
-    disconnectSocket()
-    let attemptID = String(UUID().uuidString.prefix(8))
+    beginAttempt(attemptID)
     await DiagnosticLog.shared.record(
       "attempt=\(attemptID) connect start "
         + "transcriptionModel=\(RealtimeAPI.transcriptionModel) "
         + "endpoint=/v1/realtime intent=transcription"
     )
 
+    try requireCurrentAttempt(attemptID)
     guard let endpoint = RealtimeAPI.endpoint else {
       throw ClientError.invalidEndpoint
     }
@@ -277,6 +307,7 @@ actor RealtimeTranscriptionClient {
     await DiagnosticLog.shared.record(
       "attempt=\(attemptID) task resumed state=\(socket.state.rawValue)"
     )
+    try requireCurrentAttempt(attemptID)
     receiveTask = Task { [weak self, weak socket] in
       guard let socket else {
         return
@@ -293,6 +324,7 @@ actor RealtimeTranscriptionClient {
         "attempt=\(attemptID) didOpen observed; "
           + "sending session.update state=\(socket.state.rawValue)"
       )
+      try requireCurrentAttempt(attemptID)
       let sessionEvent = RealtimeClientEvent.sessionUpdate(configuration)
       try await send(sessionEvent, through: socket)
       await DiagnosticLog.shared.record(
@@ -304,9 +336,31 @@ actor RealtimeTranscriptionClient {
           + RealtimeDiagnosticFormatter.errorSummary(error),
         level: .error
       )
-      disconnectSocket()
+      if activeAttemptID == attemptID {
+        disconnectSocket()
+      }
       throw error
     }
+  }
+
+  func beginAttempt(_ attemptID: String) {
+    disconnectSocket()
+    activeAttemptID = attemptID
+  }
+
+  private func requireCurrentAttempt(_ attemptID: String) throws {
+    guard !Task.isCancelled, activeAttemptID == attemptID else { throw CancellationError() }
+  }
+
+  @discardableResult
+  func receive(_ event: RealtimeServerEvent, attemptID: String) -> Bool {
+    guard !Task.isCancelled, activeAttemptID == attemptID else { return false }
+    if event == .sessionReady {
+      isReady = true
+      didLogDroppedOutbound = false
+    }
+    eventContinuation.yield(.init(attemptID: attemptID, payload: .server(event)))
+    return true
   }
 
   func disconnect() {
@@ -314,19 +368,14 @@ actor RealtimeTranscriptionClient {
   }
 
   func updateSession(_ configuration: RealtimeSessionConfiguration) async -> Bool {
-    guard isReady, let socket else {
+    guard isReady, let socket, let attemptID = activeAttemptID else {
       return false
     }
     do {
       try await send(.sessionUpdate(configuration), through: socket)
-      return true
+      return activeAttemptID == attemptID
     } catch {
-      if let activeAttemptID {
-        reportConnectionLost(
-          attemptID: activeAttemptID,
-          message: error.localizedDescription
-        )
-      }
+      reportConnectionLost(attemptID: attemptID, message: error.localizedDescription)
       return false
     }
   }
@@ -349,16 +398,11 @@ actor RealtimeTranscriptionClient {
         return
       }
 
-      if isReady {
+      if isReady, let attemptID = activeAttemptID, action.attemptID == attemptID {
         do {
           try await send(action)
         } catch {
-          if let activeAttemptID {
-            reportConnectionLost(
-              attemptID: activeAttemptID,
-              message: error.localizedDescription
-            )
-          }
+          reportConnectionLost(attemptID: attemptID, message: error.localizedDescription)
         }
       } else if !didLogDroppedOutbound {
         didLogDroppedOutbound = true
@@ -393,11 +437,7 @@ actor RealtimeTranscriptionClient {
         await DiagnosticLog.shared.record(
           "attempt=\(attemptID) received \(event.diagnosticName)"
         )
-        if event == .sessionReady {
-          isReady = true
-          didLogDroppedOutbound = false
-        }
-        eventContinuation.yield(.server(event))
+        guard receive(event, attemptID: attemptID) else { return }
       }
     } catch is CancellationError {
       await DiagnosticLog.shared.record(
@@ -417,13 +457,12 @@ actor RealtimeTranscriptionClient {
     }
   }
 
-  private func reportConnectionLost(attemptID: String, message: String) {
+  func reportConnectionLost(attemptID: String, message: String) {
     guard activeAttemptID == attemptID else {
       return
     }
-    isReady = false
-    activeAttemptID = nil
-    eventContinuation.yield(.connectionLost(message: message))
+    disconnectSocket()
+    eventContinuation.yield(.init(attemptID: attemptID, payload: .connectionLost(message: message)))
   }
 
   private func send(_ action: RealtimeOutboundAction) async throws {
@@ -431,7 +470,7 @@ actor RealtimeTranscriptionClient {
       throw ClientError.notConnected
     }
 
-    switch action {
+    switch action.payload {
     case .append(let data):
       try await send(.appendAudio(data), through: socket)
     case .commit(let eventID):

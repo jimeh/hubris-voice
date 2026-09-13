@@ -116,7 +116,8 @@ Update the milestone 1 transition table for these rows.
   `apply(_ set: ShortcutSet)` rebuilds the gestures; when rebuilding while a
   gesture is held, cancel it first.
 - Callback `onAction: (ShortcutRole, ShortcutGesture.Action) -> Void`.
-- `capturesEscape`, `capturesReturn`, `onEscape`, `onReturn` unchanged.
+- `capturesEscape` and `onEscape` remain. Return is not intercepted; recovery
+  uses the paste-last-transcript shortcut or the menu bar.
 - Tap re-enable after `tapDisabledByTimeout` cancels every held gesture, as
   today. Also cancel all on `NSWorkspace.willSleepNotification` (the model
   calls `cancelAll()`).

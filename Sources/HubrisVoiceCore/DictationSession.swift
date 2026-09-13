@@ -63,6 +63,7 @@ public struct DictationSession: Equatable, Sendable {
   public enum RejectionReason: Equatable, Sendable {
     case noTarget
     case secureField
+    case deliveryFailed
   }
 
   public enum Event: Equatable, Sendable {
@@ -142,6 +143,8 @@ public struct DictationSession: Equatable, Sendable {
   public private(set) var nextGeneration = 0
   public private(set) var isLocked = false
 
+  // Keep committed generations until their ACK arrives, even after cancel or timeout.
+  private var awaitingCommitAcknowledgements: [Int] = []
   private var configuration: Configuration
   public init(configuration: Configuration = .init(), hasKey: Bool) {
     self.configuration = configuration
@@ -152,8 +155,18 @@ public struct DictationSession: Equatable, Sendable {
     configuration.tapToLock = enabled
   }
 
-  // swiftlint:disable:next cyclomatic_complexity
   public mutating func transition(_ event: Event) -> [Effect] {
+    let effects = effects(for: event)
+    for effect in effects {
+      if case .commitAudio(let generation) = effect {
+        awaitingCommitAcknowledgements.append(generation)
+      }
+    }
+    return effects
+  }
+
+  // swiftlint:disable:next cyclomatic_complexity
+  private mutating func effects(for event: Event) -> [Effect] {
     switch event {
     case .credentialsChanged(let hasKey):
       return credentialsChanged(hasKey: hasKey)
@@ -451,8 +464,9 @@ private extension DictationSession {
     case .sessionReady:
       return sessionBecameReady()
     case .inputCommitted(let itemID):
-      guard !pending.contains(where: { $0.itemID == itemID }) else { return [] }
-      guard let index = pending.firstIndex(where: { $0.itemID == nil }) else { return [] }
+      guard !awaitingCommitAcknowledgements.isEmpty else { return [] }
+      let generation = awaitingCommitAcknowledgements.removeFirst()
+      guard let index = pending.firstIndex(where: { $0.generation == generation }) else { return [] }
       pending[index].itemID = itemID
       return []
     case .transcriptDelta(let itemID, let delta):
@@ -565,6 +579,7 @@ private extension DictationSession {
   /// A new socket re-transcribes replayed audio from scratch, so live item IDs
   /// and their partial transcripts are both stale.
   mutating func clearPendingItemIDs() {
+    awaitingCommitAcknowledgements.removeAll()
     for index in pending.indices {
       pending[index].itemID = nil
       pending[index].transcript = ""
@@ -579,6 +594,7 @@ private extension DictationSession {
       let message = switch reason {
       case .noTarget: "No text field is focused"
       case .secureField: "Secure field"
+      case .deliveryFailed: "Could not send paste"
       }
       return PresentationValues(mode: .attention, text: text, message: message)
     case .timedOut(let text):

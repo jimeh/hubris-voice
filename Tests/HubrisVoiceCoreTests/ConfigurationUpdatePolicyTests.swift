@@ -29,6 +29,13 @@ final class ConfigurationUpdatePolicyTests: XCTestCase {
     )
   }
 
+  func testClearingLanguagesRequiresFreshSession() {
+    XCTAssertEqual(
+      policy.decision(from: .init(languages: ["en"]), to: .init(languages: []), apiKeyChanged: false),
+      .reconnect
+    )
+  }
+
   func testNoChangeRequiresNothing() {
     XCTAssertEqual(policy.decision(from: .init(), to: .init(), apiKeyChanged: false), .nothing)
   }

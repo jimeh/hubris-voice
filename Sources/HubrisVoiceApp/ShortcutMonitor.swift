@@ -45,6 +45,25 @@ final class ShortcutMonitor: @unchecked Sendable {
     }
   }
 
+  var isSuspended: Bool {
+    get {
+      lock.lock()
+      defer { lock.unlock() }
+      return suspended
+    }
+    set {
+      lock.lock()
+      defer { lock.unlock() }
+      suspended = newValue
+      if newValue {
+        for role in ShortcutRole.allCases {
+          _ = gestures[role]?.cancel()
+        }
+      }
+    }
+  }
+
+  private var suspended = false
   private let lock = NSLock()
   private var gestures: [ShortcutRole: ShortcutGesture]
   private var isCapturingEscape = false
@@ -129,7 +148,7 @@ final class ShortcutMonitor: @unchecked Sendable {
     cancelAll()
   }
 
-  fileprivate func process(type: CGEventType, event: CGEvent) -> Bool {
+  func process(type: CGEventType, event: CGEvent) -> Bool {
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
       cancelAll()
       onTapDisabled?()
@@ -139,6 +158,7 @@ final class ShortcutMonitor: @unchecked Sendable {
       return false
     }
 
+    guard !isSuspended else { return false }
     guard type == .keyDown || type == .keyUp || type == .flagsChanged else {
       return false
     }

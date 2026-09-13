@@ -125,6 +125,7 @@ final class AppModel: ObservableObject {
     didSet {
       guard dictationEnabled != oldValue else { return }
       updateSettings { $0.dictationEnabled = dictationEnabled }
+      shortcutMonitor.isSuspended = !dictationEnabled || isRecordingShortcut
       if !dictationEnabled, session.listening != nil {
         apply(.cancelRequested)
       }
@@ -253,15 +254,17 @@ final class AppModel: ObservableObject {
   private var streamingGeneration: Int?
   private var finalizingTimers: [Int: Task<Void, Never>] = [:]
   private var eventTask: Task<Void, Never>?
-  private var stopCaptureTask: Task<Void, Never>?
+  private let captureFinalizer = CaptureFinalizer()
   private var permissionPollingTask: Task<Void, Never>?
   private var transportTask: Task<Void, Never>?
+  private var transportAttemptID: String?
   private var workspaceObservers: [NSObjectProtocol] = []
   private var recordingStartedAt: Date?
   private var releasedAt: [Int: Date] = [:]
   private var isStarted = false
   private var isShortcutRunning = false
   private var savedAPIKey: String
+  private var configurationNeedsReconnect = false
   private var configurationUpdateDeferred = false
   private var configurationUpdateScheduled = false
   private var pendingConfigurationAcks = 0
@@ -344,6 +347,7 @@ final class AppModel: ObservableObject {
       Task { @MainActor [weak self] in self?.cancelLockedRecording() }
     }
     applyShortcutSet(settings.shortcuts)
+    shortcutMonitor.isSuspended = !dictationEnabled
   }
 
   func start() {
@@ -541,7 +545,8 @@ final class AppModel: ObservableObject {
       apiKeyChanged: false
     ) {
     case .reconnect:
-      apply(.connectRequested(force: true))
+      configurationNeedsReconnect = true
+      scheduleConfigurationUpdate()
     case .sessionUpdate:
       scheduleConfigurationUpdate()
     case .nothing:
@@ -566,12 +571,19 @@ final class AppModel: ObservableObject {
     }
     configurationUpdateDeferred = false
     configurationState = .pending
+    if configurationNeedsReconnect {
+      configurationNeedsReconnect = false
+      pendingConfigurationAcks = 0
+      apply(.connectRequested(force: true))
+      return
+    }
     pendingConfigurationAcks += 1
     let configuration = settings.sessionConfiguration
+    let attemptID = transportAttemptID
     Task { [weak self] in
       guard let self else { return }
       let sent = await client.updateSession(configuration)
-      if !sent {
+      if !sent, attemptID == transportAttemptID {
         pendingConfigurationAcks = max(
           0,
           pendingConfigurationAcks - 1
@@ -788,7 +800,10 @@ final class AppModel: ObservableObject {
       }
       stopCaptureAfterGrace()
     case .replayAudio(let generation): client.outbound.replay(buffers[generation]?.chunks ?? [])
-    case .commitAudio: client.outbound.commitAudio()
+    case .commitAudio(let generation):
+      captureFinalizer.commitAfterStop(generation: generation) { [weak self] in
+        self?.client.outbound.commitAudio()
+      }
     case .clearAudio(let generation):
       if generation == streamingGeneration {
         client.outbound.clearAudio()
@@ -853,7 +868,7 @@ final class AppModel: ObservableObject {
       apply(.pressed)
       return
     }
-    let hasKey = !apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    let hasKey = !savedAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     guard hasKey else {
       apply(.pressed)
       return
@@ -867,7 +882,26 @@ final class AppModel: ObservableObject {
 
   /// Set while the Settings window is capturing a new binding so that the
   /// keys being recorded do not also trigger dictation.
-  var isRecordingShortcut = false
+  @Published private(set) var recordingShortcutRole: ShortcutRole?
+  var isRecordingShortcut: Bool {
+    recordingShortcutRole != nil
+  }
+
+  func beginShortcutRecording(for role: ShortcutRole) -> Bool {
+    guard recordingShortcutRole == nil else { return false }
+    if session.listening != nil {
+      apply(.cancelRequested)
+    }
+    recordingShortcutRole = role
+    shortcutMonitor.isSuspended = true
+    return true
+  }
+
+  func endShortcutRecording(for role: ShortcutRole) {
+    guard recordingShortcutRole == role else { return }
+    recordingShortcutRole = nil
+    shortcutMonitor.isSuspended = !dictationEnabled
+  }
 
   private func handleShortcut(
     role: ShortcutRole,
@@ -930,7 +964,8 @@ final class AppModel: ObservableObject {
   }
 
   private func handle(_ event: RealtimeTransportEvent) {
-    switch event {
+    guard event.belongsTo(transportAttemptID) else { return }
+    switch event.payload {
     case .server(.sessionReady):
       pendingConfigurationAcks = max(
         0,
@@ -963,16 +998,16 @@ final class AppModel: ObservableObject {
     guard let generation = streamingGeneration, var buffer = buffers[generation] else { return }
     let result = buffer.append(data)
     buffers[generation] = buffer
-    if result == .full {
-      apply(.bufferFull(generation: generation))
-    } else if session.connection == .ready {
+    if result == .stored, session.connection == .ready {
       client.outbound.appendAudio(data)
+    }
+    if buffer.isFull {
+      apply(.bufferFull(generation: generation))
     }
   }
 
   private func startCapture(generation: Int) {
-    stopCaptureTask?.cancel()
-    stopCaptureTask = nil
+    captureFinalizer.finish()
     let capturedFocus = insertionService.captureFocusedTarget()
     currentAnchor = insertionService.captureAnchor(for: capturedFocus)
     buffers[generation] = AudioSnippetBuffer()
@@ -988,11 +1023,9 @@ final class AppModel: ObservableObject {
 
   private func stopCaptureAfterGrace() {
     recordingStartedAt = nil
-    let stoppingGeneration = streamingGeneration
-    stopCaptureTask?.cancel()
-    stopCaptureTask = Task { [weak self] in
-      try? await Task.sleep(for: .milliseconds(100))
-      guard !Task.isCancelled, let self, streamingGeneration == stoppingGeneration else { return }
+    guard let stoppingGeneration = streamingGeneration else { return }
+    captureFinalizer.schedule(generation: stoppingGeneration) { [weak self] in
+      guard let self, streamingGeneration == stoppingGeneration else { return }
       audioCapture.stop()
       streamingGeneration = nil
     }
@@ -1077,18 +1110,23 @@ final class AppModel: ObservableObject {
   }
 
   private func enqueueConnect() {
+    let attemptID = UUID().uuidString
+    transportAttemptID = attemptID
+    client.outbound.setAttempt(attemptID)
     let previous = transportTask
     transportTask = Task { [weak self] in
       _ = await previous?.value
-      guard let self else { return }
+      guard !Task.isCancelled, let self, transportAttemptID == attemptID else { return }
       do {
         try await client.connect(
           apiKey: savedAPIKey,
-          configuration: settings.sessionConfiguration
+          configuration: settings.sessionConfiguration,
+          attemptID: attemptID
         )
       } catch is CancellationError {
         return
       } catch {
+        guard !Task.isCancelled, transportAttemptID == attemptID else { return }
         apply(.connectionFailed(message: error.localizedDescription))
         settingsMessage = error.localizedDescription + " Debug log: \(DiagnosticLog.displayPath)"
       }
@@ -1096,6 +1134,8 @@ final class AppModel: ObservableObject {
   }
 
   private func enqueueDisconnect() {
+    transportAttemptID = nil
+    client.outbound.setAttempt(nil)
     transportTask?.cancel()
     transportTask = Task { [weak self] in
       await self?.client.disconnect()

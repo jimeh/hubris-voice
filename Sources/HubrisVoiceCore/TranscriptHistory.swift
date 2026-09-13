@@ -45,6 +45,15 @@ public struct TranscriptHistory: Equatable, Codable, Sendable {
     entries = []
   }
 
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    limit = try container.decode(Int.self, forKey: .limit)
+    guard limit >= 0 else {
+      throw DecodingError.dataCorruptedError(forKey: .limit, in: container, debugDescription: "Negative history limit")
+    }
+    entries = try Array(container.decode([TranscriptEntry].self, forKey: .entries).prefix(limit))
+  }
+
   public var latest: TranscriptEntry? {
     entries.first
   }

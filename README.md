@@ -8,10 +8,11 @@ field you are dictating into shows the live transcript and a mic-level
 indicator; it wraps to a configurable number of lines, three by default, and a
 cap of one scrolls sideways instead. Release the shortcut to commit the audio;
 the finalized transcript is inserted wherever the caret is at that moment,
-using clipboard paste. The pill hides after the insertion attempt. If there
-is no text field to insert into, the pill shows why and hides again; the
-optional paste-last-transcript shortcut or the menu bar's Copy inserts it
-later. The previous clipboard is restored unless another copy has replaced it.
+using clipboard paste. The pill hides after the insertion attempt. If the app
+detects a secure field or no foreground app,
+recorded text remains available for recovery. The optional paste-last-transcript
+shortcut retries insertion; the menu bar's Copy puts the text on the clipboard
+for manual paste. The previous clipboard is restored unless another copy has replaced it.
 
 ## Current scope
 

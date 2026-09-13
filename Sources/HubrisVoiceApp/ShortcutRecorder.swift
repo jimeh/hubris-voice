@@ -43,6 +43,7 @@ struct ShortcutRecorder: View {
             .foregroundStyle(.secondary)
         }
         Button("Record…") { startRecording() }
+          .disabled(model.isRecordingShortcut)
         if allowsClear, binding != nil {
           Button("Clear") { model.setShortcut(nil, for: role) }
         }
@@ -52,10 +53,9 @@ struct ShortcutRecorder: View {
   }
 
   private func startRecording() {
-    guard monitor == nil else { return }
+    guard monitor == nil, model.beginShortcutRecording(for: role) else { return }
     isRecording = true
     hint = nil
-    model.isRecordingShortcut = true
     monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
       handle(event) ? nil : event
     }
@@ -67,7 +67,7 @@ struct ShortcutRecorder: View {
     }
     monitor = nil
     isRecording = false
-    model.isRecordingShortcut = false
+    model.endShortcutRecording(for: role)
   }
 
   /// Returns true when the event was consumed by the recorder.

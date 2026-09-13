@@ -1,5 +1,10 @@
 # Milestone 1: reliability
 
+> Historical implementation plan. Return-based recovery below was superseded:
+> the current app leaves Return untouched and uses the paste-last-transcript
+> shortcut or menu bar Copy for recovery.
+
+
 Design brief for the first milestone of
 [the daily driver plan](2026-09-13-daily-driver.md). This document is the
 contract for implementation. Where it and the existing code disagree, this

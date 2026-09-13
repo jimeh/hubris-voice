@@ -6,8 +6,8 @@ History tab, and icon states) is implemented by the orchestrator.
 
 ## Outcome
 
-- Every transcript is retained in memory with its outcome, so a rejected or
-  dismissed paste is never lost.
+- The latest 50 transcripts are retained in memory with their outcomes for
+  recovery after rejected or dismissed insertion. Older entries are evicted.
 - The menu bar shows connection state and the last transcript, and offers
   copy, history, enable/disable, reconnect, and the log.
 - Optional sound cues on start, stop, pasted, and rejected.

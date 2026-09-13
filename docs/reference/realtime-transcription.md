@@ -10,6 +10,7 @@ Official docs:
 - Guide: https://developers.openai.com/api/docs/guides/realtime-transcription
 - Client events: https://developers.openai.com/api/docs/api-reference/realtime-client-events
 - Server events: https://developers.openai.com/api/docs/api-reference/realtime-server-events
+- Transcription WebSocket endpoint example: https://developers.openai.com/cookbook/examples/speech_transcription_methods
 - Model overview: https://developers.openai.com/docs/guides/realtime
 
 Legend: [docs] from the pages above, [observed] confirmed in this app against
@@ -56,7 +57,8 @@ the live API, [assumed] not yet confirmed either way.
 
 - [docs] `keywords` and `languages` are supported by `gpt-live-transcribe`.
   `languages` is an array of ISO-639-1 codes listing possible input
-  languages; there is also a singular `language`.
+  languages. This model uses `languages`, not the singular `language` field
+  used by other transcription models.
 - [docs] `delay` is one of `minimal`, `low`, `medium`, `high`, `xhigh`.
   Lower values emit partial text sooner; higher values improve quality.
 - [docs] `turn_detection: null` disables server voice activity detection so
@@ -64,7 +66,9 @@ the live API, [assumed] not yet confirmed either way.
   relies on this for push-to-talk.
 - [docs] `session.update` can be sent again on the live socket to change
   prompt, keywords, languages, or delay. The server answers with
-  `session.updated`. A reconnect is not required for configuration changes.
+  `session.updated`. Omitting a field preserves its current value. The app
+  reconnects when clearing all language hints, after active snippets finish,
+  because omission on a live session would retain the previous hints.
 - [observed] Sending `session.update` immediately after the socket opens,
   before any `session.created` handling, works.
 

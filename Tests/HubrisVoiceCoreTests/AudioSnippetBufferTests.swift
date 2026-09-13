@@ -22,12 +22,13 @@ final class AudioSnippetBufferTests: XCTestCase {
     XCTAssertEqual(buffer.byteCount, 2)
   }
 
-  func testAppendAtCapacityReturnsFullAndDropsChunk() {
+  func testAppendAtCapacityStoresTheFinalChunk() {
     var buffer = AudioSnippetBuffer(capacityBytes: 3)
 
-    XCTAssertEqual(buffer.append(Data([1, 2, 3])), .full)
-    XCTAssertTrue(buffer.chunks.isEmpty)
-    XCTAssertEqual(buffer.byteCount, 0)
+    XCTAssertEqual(buffer.append(Data([1, 2, 3])), .stored)
+    XCTAssertEqual(buffer.chunks, [Data([1, 2, 3])])
+    XCTAssertEqual(buffer.byteCount, 3)
+    XCTAssertEqual(buffer.append(Data([4])), .full)
     XCTAssertTrue(buffer.isFull)
   }
 

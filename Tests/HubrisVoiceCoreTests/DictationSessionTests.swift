@@ -2,6 +2,32 @@
 import XCTest
 
 final class DictationSessionTests: XCTestCase {
+  func testDeliveryFailureKeepsTranscriptForRecovery() {
+    var session = readySession()
+    _ = session.transition(.pasteLastRequested(text: "Recover me"))
+    _ = session.transition(.insertionFinished(generation: 0, outcome: .rejected, reason: .deliveryFailed))
+    XCTAssertEqual(session.presentation?.transcript, "Recover me")
+    XCTAssertEqual(session.presentation?.message, "Could not send paste")
+    XCTAssertEqual(session.presentation?.mode, .attention)
+  }
+
+  func testLateAcknowledgementCannotInsertCancelledOrTimedOutText() {
+    for shouldCancel in [true, false] {
+      var session = readySession()
+      _ = session.transition(.pressed)
+      _ = session.transition(.released(heldDuration: 1))
+      _ = session.transition(shouldCancel ? .cancelRequested : .finalizingTimedOut(generation: 0))
+      _ = session.transition(.pressed)
+      _ = session.transition(.released(heldDuration: 1))
+      _ = session.transition(.server(.inputCommitted(itemID: "old")))
+      XCTAssertEqual(session.transition(.server(.transcriptCompleted(itemID: "old", transcript: "Old text"))), [])
+      XCTAssertEqual(session.pending.map(\.generation), [1])
+      _ = session.transition(.server(.inputCommitted(itemID: "new")))
+      XCTAssertTrue(session.transition(.server(.transcriptCompleted(itemID: "new", transcript: "New text")))
+        .contains(.insert(generation: 1, text: "New text")))
+    }
+  }
+
   func testConnectionLossSchedulesFirstReconnectAttempt() {
     var session = readySession()
 

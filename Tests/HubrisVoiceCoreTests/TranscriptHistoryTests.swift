@@ -3,6 +3,11 @@ import Foundation
 import XCTest
 
 final class TranscriptHistoryTests: XCTestCase {
+  func testDecodingRejectsNegativeRetentionLimit() {
+    let data = Data(#"{"limit":-1,"entries":[]}"#.utf8)
+    XCTAssertThrowsError(try JSONDecoder().decode(TranscriptHistory.self, from: data))
+  }
+
   func testRecordKeepsNewestEntryFirst() {
     var history = TranscriptHistory()
     let first = entry(text: "first")

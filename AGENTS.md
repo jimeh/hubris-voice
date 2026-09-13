@@ -22,7 +22,7 @@ a Swift package. Use mise as the only project task runner and tool manager.
 - `HubrisVoiceApp` owns macOS system boundaries: AppKit and SwiftUI UI, audio,
   Accessibility, Keychain, event taps, WebSocket transport, and app lifecycle.
 - Insertion targets the element focused when the transcript arrives, not the
-  one focused at key press. Only a secure field or missing text focus rejects.
+  one focused at key press. Only a known secure field or no foreground app rejects before paste.
 - Do not treat `CGEvent.post` as proof that paste succeeded. An unobservable
   paste is recorded as attempted and hides like a success; the paste-last
   shortcut and the menu bar's Copy are the recovery path.

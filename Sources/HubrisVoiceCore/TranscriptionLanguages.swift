@@ -13,7 +13,7 @@ public extension RealtimeSessionConfiguration {
     ("he", "Hebrew"), ("hi", "Hindi"), ("hr", "Croatian"),
     ("ht", "Haitian Creole"), ("hu", "Hungarian"), ("hy", "Armenian"),
     ("id", "Indonesian"), ("is", "Icelandic"), ("it", "Italian"),
-    ("ja", "Japanese"), ("jw", "Javanese"), ("ka", "Georgian"),
+    ("ja", "Japanese"), ("jv", "Javanese"), ("ka", "Georgian"),
     ("kk", "Kazakh"), ("km", "Khmer"), ("kn", "Kannada"),
     ("ko", "Korean"), ("la", "Latin"), ("lb", "Luxembourgish"),
     ("ln", "Lingala"), ("lo", "Lao"), ("lt", "Lithuanian"),

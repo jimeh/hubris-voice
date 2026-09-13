@@ -2,6 +2,15 @@
 import XCTest
 
 final class DictationSettingsTests: XCTestCase {
+  func testLegacyJavaneseCodeMigrates() {
+    for value: Any in ["jw", ["en", "jw"]] {
+      let store = MemorySettingsStore(values: [DictationSettings.Key.language: value])
+      let languages = DictationSettings.load(from: store).languages
+      XCTAssertTrue(languages.contains("jv"))
+      XCTAssertFalse(languages.contains("jw"))
+    }
+  }
+
   func testLoadDefaultsFromEmptyStore() {
     let settings = DictationSettings.load(from: MemorySettingsStore())
 

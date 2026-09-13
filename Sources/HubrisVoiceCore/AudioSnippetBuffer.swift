@@ -19,12 +19,13 @@ public struct AudioSnippetBuffer: Equatable, Sendable {
   }
 
   public mutating func append(_ chunk: Data) -> AppendResult {
-    guard !isFull, chunk.count < capacityBytes - byteCount else {
+    guard !isFull, chunk.count <= capacityBytes - byteCount else {
       isFull = true
       return .full
     }
     chunks.append(chunk)
     byteCount += chunk.count
+    isFull = byteCount == capacityBytes
     return .stored
   }
 }

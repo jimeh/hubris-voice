@@ -1,5 +1,11 @@
 # Milestone 3: text insertion quality and overlay lifetime
 
+> Historical implementation plan. The current app uses transient clipboard paste
+> for every insertion and does not intercept Return. Accessibility reads provide
+> context and confirmation only; the direct-write and Return contracts below
+> were superseded by the later daily-use work.
+
+
 Design brief for milestone 3 of [the daily driver plan](2026-09-13-daily-driver.md).
 Builds on milestones 1 and 2. Part A is delegated; part B is implemented by
 the orchestrator after part A lands, because it touches the riskiest path.

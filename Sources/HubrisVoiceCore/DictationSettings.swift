@@ -114,7 +114,7 @@ public struct DictationSettings: Equatable, Sendable {
       .flatMap { try? JSONDecoder().decode(ShortcutSet.self, from: $0) }
       ?? ShortcutSet()
     return DictationSettings(
-      languages: languages,
+      languages: languages.map { $0 == "jw" ? "jv" : $0 },
       prompt: store.string(Key.prompt) ?? defaultPrompt,
       dictionary: store.stringArray(Key.dictionary) ?? [],
       overlayPlacement: store.string(Key.overlayPlacement)
@@ -183,7 +183,7 @@ public struct ConfigurationUpdatePolicy: Equatable, Sendable {
     to new: DictationSettings,
     apiKeyChanged: Bool
   ) -> Decision {
-    if apiKeyChanged {
+    if apiKeyChanged || (!old.languages.isEmpty && new.languages.isEmpty) {
       return .reconnect
     }
     if old.sessionConfiguration != new.sessionConfiguration {
