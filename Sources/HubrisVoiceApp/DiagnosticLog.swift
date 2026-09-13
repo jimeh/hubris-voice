@@ -13,7 +13,7 @@ actor DiagnosticLog {
   static let shared = DiagnosticLog()
 
   private let systemLogger = Logger(
-    subsystem: "com.jimeh.HubrisVoice",
+    subsystem: AppIdentity.bundleIdentifier,
     category: "Realtime"
   )
   private let fileURL: URL

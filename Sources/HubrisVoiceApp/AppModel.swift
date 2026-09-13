@@ -246,7 +246,9 @@ final class AppModel: ObservableObject {
   private let historyPersistenceScheduler = DelayedActionScheduler()
   private let historyStore: TranscriptHistoryStore
   private let networkMonitor = NWPathMonitor()
-  private let networkQueue = DispatchQueue(label: "com.jimeh.HubrisVoice.network")
+  private let networkQueue = DispatchQueue(
+    label: "\(AppIdentity.bundleIdentifier).network"
+  )
 
   private var session: DictationSession
   private(set) var settings: DictationSettings

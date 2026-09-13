@@ -8,6 +8,9 @@ script_dir="${0:A:h}"
 repo_dir="${script_dir:h}"
 artifact_root="${repo_dir}/.build/artifacts"
 app_dir="${artifact_root}/Hubris Voice.app"
+bundle_identifier="$(
+  plutil -extract CFBundleIdentifier raw -o - "${repo_dir}/Support/Info.plist"
+)"
 
 case "${signing_mode}" in
   "development" | "adhoc") ;;
@@ -57,7 +60,7 @@ fi
 codesign \
   --force \
   --sign "${signing_identity}" \
-  --identifier com.jimeh.HubrisVoice \
+  --identifier "${bundle_identifier}" \
   "${stage_app}"
 
 mkdir -p "${artifact_root}"

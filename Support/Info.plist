@@ -9,7 +9,7 @@
     <key>CFBundleExecutable</key>
     <string>HubrisVoice</string>
     <key>CFBundleIdentifier</key>
-    <string>com.jimeh.HubrisVoice</string>
+    <string>dev.jimeh.HubrisVoice</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

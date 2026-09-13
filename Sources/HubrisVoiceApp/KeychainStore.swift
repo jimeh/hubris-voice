@@ -19,7 +19,7 @@ struct KeychainStore: Sendable {
     }
   }
 
-  private let service = "com.jimeh.HubrisVoice"
+  private let service = AppIdentity.bundleIdentifier
   private let account = "openai-api-key"
 
   func readAPIKey() throws -> String? {

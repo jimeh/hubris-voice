@@ -47,7 +47,9 @@ final class AudioCapture: @unchecked Sendable {
 
   private let engine = AVAudioEngine()
   private let lock = NSRecursiveLock()
-  private let deviceListenerQueue = DispatchQueue(label: "com.jimeh.HubrisVoice.audio-devices")
+  private let deviceListenerQueue = DispatchQueue(
+    label: "\(AppIdentity.bundleIdentifier).audio-devices"
+  )
   private var converter: AVAudioConverter?
   private var targetFormat: AVAudioFormat?
   private var storedPreferredDeviceUID: String?
