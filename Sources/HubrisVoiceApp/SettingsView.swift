@@ -21,7 +21,10 @@ struct SettingsView: View {
     .frame(width: 560, height: 650)
     .background(Color(nsColor: .windowBackgroundColor))
     .onAppear {
-      model.refreshPermissions()
+      model.startPermissionPolling()
+    }
+    .onDisappear {
+      model.stopPermissionPolling()
     }
   }
 
@@ -97,7 +100,13 @@ struct SettingsView: View {
         HStack {
           SecureField("API key", text: $model.apiKeyDraft)
             .textFieldStyle(.roundedBorder)
-          Picker("Language", selection: $model.language) {
+          Picker(
+            "Language",
+            selection: Binding(
+              get: { model.languages.first ?? "en" },
+              set: { model.languages = [$0] }
+            )
+          ) {
             Text("English").tag("en")
           }
           .labelsHidden()
@@ -109,7 +118,7 @@ struct SettingsView: View {
             .foregroundStyle(.secondary)
           Spacer()
           Button("Save & reconnect") {
-            model.saveSettings()
+            model.saveAPIKey()
           }
           .buttonStyle(.borderedProminent)
         }

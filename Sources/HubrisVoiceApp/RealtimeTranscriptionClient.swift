@@ -313,6 +313,24 @@ actor RealtimeTranscriptionClient {
     disconnectSocket()
   }
 
+  func updateSession(_ configuration: RealtimeSessionConfiguration) async -> Bool {
+    guard isReady, let socket else {
+      return false
+    }
+    do {
+      try await send(.sessionUpdate(configuration), through: socket)
+      return true
+    } catch {
+      if let activeAttemptID {
+        reportConnectionLost(
+          attemptID: activeAttemptID,
+          message: error.localizedDescription
+        )
+      }
+      return false
+    }
+  }
+
   private func disconnectSocket() {
     isReady = false
     activeAttemptID = nil

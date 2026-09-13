@@ -24,18 +24,18 @@ public struct RealtimeSessionConfiguration: Equatable, Sendable {
     case xhigh
   }
 
-  public let language: String
+  public let languages: [String]
   public let prompt: String
   public let keywords: [String]
   public let delay: Delay
 
   public init(
-    language: String,
+    languages: [String],
     prompt: String,
     keywords: [String],
     delay: Delay
   ) {
-    self.language = language
+    self.languages = languages
     self.prompt = prompt
     self.keywords = keywords
     self.delay = delay
@@ -58,7 +58,16 @@ public enum RealtimeClientEvent: Equatable, Sendable {
   private var jsonObject: [String: Any] {
     switch self {
     case .sessionUpdate(let configuration):
-      [
+      var transcription: [String: Any] = [
+        "model": RealtimeAPI.transcriptionModel,
+        "prompt": configuration.prompt,
+        "keywords": configuration.keywords,
+        "delay": configuration.delay.rawValue,
+      ]
+      if !configuration.languages.isEmpty {
+        transcription["languages"] = configuration.languages
+      }
+      return [
         "type": "session.update",
         "session": [
           "type": "transcription",
@@ -68,30 +77,24 @@ public enum RealtimeClientEvent: Equatable, Sendable {
                 "type": "audio/pcm",
                 "rate": 24_000,
               ],
-              "transcription": [
-                "model": RealtimeAPI.transcriptionModel,
-                "prompt": configuration.prompt,
-                "keywords": configuration.keywords,
-                "languages": [configuration.language],
-                "delay": configuration.delay.rawValue,
-              ],
+              "transcription": transcription,
               "turn_detection": NSNull(),
             ],
           ],
         ],
       ]
     case .appendAudio(let data):
-      [
+      return [
         "type": "input_audio_buffer.append",
         "audio": data.base64EncodedString(),
       ]
     case .commitAudio(let eventID):
-      [
+      return [
         "event_id": eventID,
         "type": "input_audio_buffer.commit",
       ]
     case .clearAudio:
-      [
+      return [
         "type": "input_audio_buffer.clear",
       ]
     }

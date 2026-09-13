@@ -10,16 +10,32 @@ import SwiftUI
 
 @MainActor
 final class AppModel: ObservableObject {
+  enum ConfigurationState: Equatable {
+    case applied
+    case pending
+    case failed(String)
+  }
+
   @Published private(set) var phaseTitle: String
   @Published var apiKeyDraft: String
-  @Published var language = "en"
-  @Published var prompt: String
+  @Published var languages: [String] {
+    didSet {
+      guard languages != oldValue else { return }
+      updateSettings { $0.languages = languages }
+    }
+  }
+
+  @Published var prompt: String {
+    didSet {
+      guard prompt != oldValue else { return }
+      updateSettings { $0.prompt = prompt }
+    }
+  }
+
   @Published var overlayPlacement: OverlayPlacementPreference {
     didSet {
-      defaults.set(
-        overlayPlacement.rawValue,
-        forKey: DefaultsKey.overlayPlacement
-      )
+      guard overlayPlacement != oldValue else { return }
+      updateSettings { $0.overlayPlacement = overlayPlacement }
       if session.presentation != nil {
         overlayController?.show(
           anchor: currentAnchor,
@@ -31,27 +47,56 @@ final class AppModel: ObservableObject {
 
   @Published var smartLeadingSpace: Bool {
     didSet {
-      defaults.set(smartLeadingSpace, forKey: DefaultsKey.smartLeadingSpace)
+      guard smartLeadingSpace != oldValue else { return }
+      updateSettings { $0.smartLeadingSpace = smartLeadingSpace }
     }
   }
 
   @Published var trailingSpace: Bool {
     didSet {
-      defaults.set(trailingSpace, forKey: DefaultsKey.trailingSpace)
+      guard trailingSpace != oldValue else { return }
+      updateSettings { $0.trailingSpace = trailingSpace }
     }
   }
 
   @Published var adjustCaseAfterComma: Bool {
     didSet {
-      defaults.set(adjustCaseAfterComma, forKey: DefaultsKey.adjustCaseAfterComma)
+      guard adjustCaseAfterComma != oldValue else { return }
+      updateSettings { $0.adjustCaseAfterComma = adjustCaseAfterComma }
     }
   }
 
-  @Published private(set) var dictionaryWords: [String]
+  @Published private(set) var dictionaryWords: [String] {
+    didSet {
+      guard dictionaryWords != oldValue else { return }
+      updateSettings { $0.dictionary = dictionaryWords }
+    }
+  }
+
   @Published var newDictionaryWord = ""
   @Published private(set) var settingsMessage: String?
+  @Published private(set) var configurationState = ConfigurationState.applied
   @Published private(set) var microphonePermission: MicrophonePermission
   @Published private(set) var accessibilityTrusted: Bool
+  @Published private(set) var inputMonitoring: Bool
+  @Published private(set) var inputDevices: [(uid: String, name: String)]
+  @Published var inputDeviceUID: String? {
+    didSet {
+      guard inputDeviceUID != oldValue else { return }
+      updateSettings { $0.inputDeviceUID = inputDeviceUID }
+      audioCapture.preferredDeviceUID = inputDeviceUID
+    }
+  }
+
+  @Published var launchAtLogin: Bool {
+    didSet {
+      guard launchAtLogin != oldValue, !isRefreshingLoginItemStatus else { return }
+      updateSettings { $0.launchAtLogin = launchAtLogin }
+      updateLoginItem(enabled: launchAtLogin)
+    }
+  }
+
+  @Published private(set) var requiresApproval: Bool
   @Published private(set) var lastConfirmedAt: Date?
 
   let overlayModel = OverlayViewModel()
@@ -98,13 +143,16 @@ final class AppModel: ObservableObject {
   private let shortcutMonitor = PushToTalkMonitor()
   private let insertionService = TextInsertionService()
   private let keychain = KeychainStore()
+  private let loginItemService = LoginItemService()
   private let defaults: UserDefaults
   private let reconnectScheduler = DelayedActionScheduler()
   private let dismissScheduler = DelayedActionScheduler()
+  private let configurationScheduler = DelayedActionScheduler()
   private let networkMonitor = NWPathMonitor()
   private let networkQueue = DispatchQueue(label: "com.jimeh.HubrisVoice.network")
 
   private var session: DictationSession
+  private(set) var settings: DictationSettings
   private var buffers: [Int: AudioSnippetBuffer] = [:]
   private var focus: [Int: CapturedFocus] = [:]
   private var currentAnchor: OverlayAnchor?
@@ -113,40 +161,51 @@ final class AppModel: ObservableObject {
   private var eventTask: Task<Void, Never>?
   private var elapsedTask: Task<Void, Never>?
   private var stopCaptureTask: Task<Void, Never>?
+  private var permissionPollingTask: Task<Void, Never>?
   private var transportTask: Task<Void, Never>?
   private var wakeObserver: NSObjectProtocol?
   private var recordingStartedAt: Date?
   private var releasedAt: [Int: Date] = [:]
   private var isStarted = false
   private var isShortcutRunning = false
+  private var savedAPIKey: String
+  private var configurationUpdateDeferred = false
+  private var configurationUpdateScheduled = false
+  private var pendingConfigurationAcks = 0
+  private var isRefreshingLoginItemStatus = false
 
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
     let storedAPIKey = (try? keychain.readAPIKey()) ?? ""
+    let loginItemStatus = LoginItemService().status
+    var settings = DictationSettings.load(from: defaults)
+    if loginItemStatus == .enabled {
+      settings.launchAtLogin = true
+    }
+    self.settings = settings
+    savedAPIKey = storedAPIKey
     apiKeyDraft = storedAPIKey
-    language = defaults.string(forKey: DefaultsKey.language) ?? "en"
-    prompt = defaults.string(forKey: DefaultsKey.prompt)
-      ?? "Transcribe natural dictation. Preserve the spelling and capitalization of dictionary terms. Add punctuation suitable for prose."
-    overlayPlacement = defaults.string(
-      forKey: DefaultsKey.overlayPlacement
-    ).flatMap(OverlayPlacementPreference.init(rawValue:)) ?? .automatic
-    smartLeadingSpace = defaults.object(
-      forKey: DefaultsKey.smartLeadingSpace
-    ) as? Bool ?? true
-    trailingSpace = defaults.object(
-      forKey: DefaultsKey.trailingSpace
-    ) as? Bool ?? true
-    adjustCaseAfterComma = defaults.object(
-      forKey: DefaultsKey.adjustCaseAfterComma
-    ) as? Bool ?? false
-    dictionaryWords = defaults.stringArray(forKey: DefaultsKey.dictionary) ?? []
+    languages = settings.languages
+    prompt = settings.prompt
+    overlayPlacement = settings.overlayPlacement
+    smartLeadingSpace = settings.smartLeadingSpace
+    trailingSpace = settings.trailingSpace
+    adjustCaseAfterComma = settings.adjustCaseAfterComma
+    dictionaryWords = settings.dictionary
     microphonePermission = PermissionService.microphone
     accessibilityTrusted = PermissionService.accessibilityTrusted
+    inputMonitoring = PermissionService.inputMonitoring
+    inputDevices = AudioCapture.availableInputDevices()
+    inputDeviceUID = settings.inputDeviceUID
+    launchAtLogin = loginItemStatus == .enabled
+    requiresApproval = loginItemStatus == .requiresApproval
     lastConfirmedAt = nil
     session = DictationSession(
       hasKey: !storedAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     )
     phaseTitle = session.phaseTitle
+    settings.save(to: defaults)
+    audioCapture.preferredDeviceUID = settings.inputDeviceUID
 
     audioCapture.onChunk = { [weak self] data in
       Task { @MainActor [weak self] in self?.handleAudioChunk(data) }
@@ -156,8 +215,11 @@ final class AppModel: ObservableObject {
     }
     audioCapture.onError = { [weak self] message in
       Task { @MainActor [weak self] in
-        self?.apply(.localError(message: "Audio conversion failed: \(message)"))
+        self?.apply(.localError(message: message))
       }
+    }
+    audioCapture.onDevicesChanged = { [weak self] in
+      Task { @MainActor [weak self] in self?.refreshInputDevices() }
     }
     shortcutMonitor.onPress = { [weak self] in
       Task { @MainActor [weak self] in self?.handlePress() }
@@ -180,6 +242,8 @@ final class AppModel: ObservableObject {
     guard !isStarted else { return }
     isStarted = true
     refreshPermissions()
+    refreshInputDevices()
+    refreshLoginItemStatus()
     startShortcutIfPermitted()
     observeReconnectSignals()
 
@@ -196,24 +260,26 @@ final class AppModel: ObservableObject {
     }
   }
 
-  func saveSettings() {
+  func saveAPIKey() {
     settingsMessage = nil
     do {
-      dictionaryWords = try DictionaryVocabulary.normalize(dictionaryWords)
       let apiKey = apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
       if apiKey.isEmpty {
         try keychain.deleteAPIKey()
       } else {
         try keychain.writeAPIKey(apiKey)
       }
-      defaults.set(language, forKey: DefaultsKey.language)
-      defaults.set(prompt, forKey: DefaultsKey.prompt)
-      defaults.set(dictionaryWords, forKey: DefaultsKey.dictionary)
+      let previousAPIKey = savedAPIKey
+      let apiKeyChanged = apiKey != previousAPIKey
+      savedAPIKey = apiKey
       settingsMessage = apiKey.isEmpty
         ? "Add an OpenAI API key to connect."
-        : "Saved. Reconnecting with the new vocabulary…"
+        : apiKeyChanged ? "Saved. Reconnecting…" : "Saved."
+      guard apiKeyChanged else { return }
       apply(.credentialsChanged(hasKey: !apiKey.isEmpty))
-      apply(.connectRequested(force: true))
+      if !previousAPIKey.isEmpty, !apiKey.isEmpty {
+        apply(.connectRequested(force: true))
+      }
     } catch {
       settingsMessage = error.localizedDescription
     }
@@ -246,15 +312,67 @@ final class AppModel: ObservableObject {
     startShortcutIfPermitted()
   }
 
+  func requestInputMonitoringPermission() {
+    PermissionService.requestInputMonitoring()
+    refreshPermissions()
+    startShortcutIfPermitted()
+  }
+
+  func openSystemSettings(
+    for permission: PermissionService.SystemPermission
+  ) {
+    PermissionService.openSystemSettings(for: permission)
+  }
+
   func refreshPermissions() {
     microphonePermission = PermissionService.microphone
     accessibilityTrusted = PermissionService.accessibilityTrusted
+    inputMonitoring = PermissionService.inputMonitoring
+    // The active event tap needs Accessibility. Input Monitoring is shown in
+    // Settings but must not gate the shortcut: its preflight can report false
+    // on setups where the tap already works.
     if accessibilityTrusted, isStarted {
       startShortcutIfPermitted()
     } else if isShortcutRunning {
       shortcutMonitor.stop()
       isShortcutRunning = false
     }
+  }
+
+  func startPermissionPolling() {
+    guard permissionPollingTask == nil else { return }
+    refreshPermissions()
+    refreshInputDevices()
+    refreshLoginItemStatus()
+    permissionPollingTask = Task { [weak self] in
+      while !Task.isCancelled {
+        do {
+          try await Task.sleep(for: .seconds(2))
+        } catch {
+          return
+        }
+        guard let self else { return }
+        refreshPermissions()
+        refreshLoginItemStatus()
+      }
+    }
+  }
+
+  func stopPermissionPolling() {
+    permissionPollingTask?.cancel()
+    permissionPollingTask = nil
+  }
+
+  func refreshInputDevices() {
+    inputDevices = AudioCapture.availableInputDevices()
+  }
+
+  func refreshLoginItemStatus() {
+    let status = loginItemService.status
+    isRefreshingLoginItemStatus = true
+    launchAtLogin = status == .enabled
+    requiresApproval = status == .requiresApproval
+    isRefreshingLoginItemStatus = false
   }
 
   func copyResult() {
@@ -269,6 +387,68 @@ final class AppModel: ObservableObject {
 
   func pasteHere() {
     apply(.pasteHereRequested)
+  }
+
+  private func updateSettings(
+    _ update: (inout DictationSettings) -> Void
+  ) {
+    let oldSettings = settings
+    update(&settings)
+    settings.save(to: defaults)
+    switch ConfigurationUpdatePolicy().decision(
+      from: oldSettings,
+      to: settings,
+      apiKeyChanged: false
+    ) {
+    case .reconnect:
+      apply(.connectRequested(force: true))
+    case .sessionUpdate:
+      scheduleConfigurationUpdate()
+    case .nothing:
+      break
+    }
+  }
+
+  private func scheduleConfigurationUpdate() {
+    configurationState = .pending
+    configurationUpdateDeferred = false
+    configurationUpdateScheduled = true
+    configurationScheduler.schedule(after: .milliseconds(500)) { [weak self] in
+      self?.sendConfigurationUpdateWhenIdle()
+    }
+  }
+
+  private func sendConfigurationUpdateWhenIdle() {
+    configurationUpdateScheduled = false
+    guard session.listening == nil, session.pending.isEmpty else {
+      configurationUpdateDeferred = true
+      return
+    }
+    configurationUpdateDeferred = false
+    configurationState = .pending
+    pendingConfigurationAcks += 1
+    let configuration = settings.sessionConfiguration
+    Task { [weak self] in
+      guard let self else { return }
+      let sent = await client.updateSession(configuration)
+      if !sent {
+        pendingConfigurationAcks = max(
+          0,
+          pendingConfigurationAcks - 1
+        )
+      }
+    }
+  }
+
+  private func resumeDeferredConfigurationUpdateIfIdle() {
+    guard
+      configurationUpdateDeferred,
+      session.listening == nil,
+      session.pending.isEmpty
+    else {
+      return
+    }
+    sendConfigurationUpdateWhenIdle()
   }
 
   private func apply(_ event: DictationSession.Event) {
@@ -308,6 +488,7 @@ final class AppModel: ObservableObject {
       }
     }
     publishSessionState()
+    resumeDeferredConfigurationUpdateIfIdle()
   }
 
   // This switch is a direct, exhaustive interpreter for the core effect enum.
@@ -400,10 +581,30 @@ final class AppModel: ObservableObject {
   private func handle(_ event: RealtimeTransportEvent) {
     switch event {
     case .server(.sessionReady):
+      pendingConfigurationAcks = max(
+        0,
+        pendingConfigurationAcks - 1
+      )
+      if
+        pendingConfigurationAcks == 0,
+        !configurationUpdateScheduled,
+        !configurationUpdateDeferred
+      {
+        configurationState = .applied
+      }
       settingsMessage = "Connected with \(dictionaryWords.count) dictionary term\(dictionaryWords.count == 1 ? "" : "s")."
       apply(.sessionReady)
-    case .server(let event): apply(.server(event))
-    case .connectionLost(let message): apply(.connectionLost(message: message))
+    case .server(.error(let message)):
+      if configurationState == .pending {
+        pendingConfigurationAcks = 0
+        configurationState = .failed(message)
+      }
+      apply(.server(.error(message: message)))
+    case .server(let event):
+      apply(.server(event))
+    case .connectionLost(let message):
+      pendingConfigurationAcks = 0
+      apply(.connectionLost(message: message))
     }
   }
 
@@ -534,15 +735,9 @@ final class AppModel: ObservableObject {
       _ = await previous?.value
       guard let self else { return }
       do {
-        let keywords = try DictionaryVocabulary.normalize(dictionaryWords)
         try await client.connect(
-          apiKey: apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines),
-          configuration: RealtimeSessionConfiguration(
-            language: language,
-            prompt: prompt,
-            keywords: keywords,
-            delay: .low
-          )
+          apiKey: savedAPIKey,
+          configuration: settings.sessionConfiguration
         )
       } catch is CancellationError {
         return
@@ -585,16 +780,38 @@ final class AppModel: ObservableObject {
       apply(.localError(message: error.localizedDescription))
     }
   }
+
+  private func updateLoginItem(enabled: Bool) {
+    settingsMessage = nil
+    do {
+      if enabled {
+        try loginItemService.register()
+      } else {
+        try loginItemService.unregister()
+      }
+    } catch {
+      settingsMessage = error.localizedDescription
+    }
+    refreshLoginItemStatus()
+  }
 }
 
-private enum DefaultsKey {
-  static let language = "transcription.language"
-  static let prompt = "transcription.prompt"
-  static let dictionary = "transcription.dictionary"
-  static let overlayPlacement = "overlay.placement"
-  static let smartLeadingSpace = "insertion.smartLeadingSpace"
-  static let trailingSpace = "insertion.trailingSpace"
-  static let adjustCaseAfterComma = "insertion.adjustCaseAfterComma"
+extension UserDefaults: SettingsStore {
+  public func string(_ key: String) -> String? {
+    string(forKey: key)
+  }
+
+  public func stringArray(_ key: String) -> [String]? {
+    stringArray(forKey: key)
+  }
+
+  public func bool(_ key: String) -> Bool? {
+    object(forKey: key) as? Bool
+  }
+
+  public func set(_ value: Any?, for key: String) {
+    set(value, forKey: key)
+  }
 }
 
 private extension PasteOutcome {
