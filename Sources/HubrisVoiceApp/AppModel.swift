@@ -11,6 +11,21 @@ final class AppModel: ObservableObject {
   @Published var apiKeyDraft: String
   @Published var language = "en"
   @Published var prompt: String
+  @Published var overlayPlacement: OverlayPlacementPreference {
+    didSet {
+      defaults.set(
+        overlayPlacement.rawValue,
+        forKey: DefaultsKey.overlayPlacement
+      )
+      if session.presentation != nil {
+        overlayController?.show(
+          anchor: currentAnchor,
+          preference: overlayPlacement
+        )
+      }
+    }
+  }
+
   @Published private(set) var dictionaryWords: [String]
   @Published var newDictionaryWord = ""
   @Published private(set) var settingsMessage: String?
@@ -67,6 +82,7 @@ final class AppModel: ObservableObject {
   private var session: DictationSession
   private var buffers: [Int: AudioSnippetBuffer] = [:]
   private var focus: [Int: CapturedFocus] = [:]
+  private var currentAnchor: OverlayAnchor?
   private var streamingGeneration: Int?
   private var finalizingTimers: [Int: Task<Void, Never>] = [:]
   private var eventTask: Task<Void, Never>?
@@ -85,6 +101,9 @@ final class AppModel: ObservableObject {
     language = defaults.string(forKey: DefaultsKey.language) ?? "en"
     prompt = defaults.string(forKey: DefaultsKey.prompt)
       ?? "Transcribe natural dictation. Preserve the spelling and capitalization of dictionary terms. Add punctuation suitable for prose."
+    overlayPlacement = defaults.string(
+      forKey: DefaultsKey.overlayPlacement
+    ).flatMap(OverlayPlacementPreference.init(rawValue:)) ?? .automatic
     dictionaryWords = defaults.stringArray(forKey: DefaultsKey.dictionary) ?? []
     microphonePermission = PermissionService.microphone
     accessibilityTrusted = PermissionService.accessibilityTrusted
@@ -252,9 +271,13 @@ final class AppModel: ObservableObject {
     shortcutMonitor.capturesEscape = session.presentation != nil
     if let presentation = session.presentation {
       overlayModel.apply(presentation)
-      overlayController?.show()
+      overlayController?.show(
+        anchor: currentAnchor,
+        preference: overlayPlacement
+      )
     } else {
       overlayController?.hide()
+      currentAnchor = nil
     }
   }
 
@@ -302,7 +325,9 @@ final class AppModel: ObservableObject {
   private func startCapture(generation: Int) {
     stopCaptureTask?.cancel()
     stopCaptureTask = nil
-    focus[generation] = insertionService.captureFocusedTarget()
+    let capturedFocus = insertionService.captureFocusedTarget()
+    focus[generation] = capturedFocus
+    currentAnchor = insertionService.captureAnchor(for: capturedFocus)
     buffers[generation] = AudioSnippetBuffer()
     streamingGeneration = generation
     recordingStartedAt = Date()
@@ -434,4 +459,5 @@ private enum DefaultsKey {
   static let language = "transcription.language"
   static let prompt = "transcription.prompt"
   static let dictionary = "transcription.dictionary"
+  static let overlayPlacement = "overlay.placement"
 }

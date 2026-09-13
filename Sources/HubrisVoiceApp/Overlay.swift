@@ -89,7 +89,10 @@ final class OverlayController {
   private let model: OverlayViewModel
   private let panel: NSPanel
   private let hostingView: NSHostingView<OverlayView>
+  private let placement = OverlayPlacement()
   private var cancellables: Set<AnyCancellable> = []
+  private var anchor: OverlayAnchor?
+  private var preference = OverlayPlacementPreference.automatic
 
   var panelFrame: NSRect {
     panel.frame
@@ -146,12 +149,16 @@ final class OverlayController {
       .store(in: &cancellables)
   }
 
-  func show() {
+  func show(
+    anchor: OverlayAnchor?,
+    preference: OverlayPlacementPreference
+  ) {
+    self.anchor = anchor
+    self.preference = preference
     resizeForTranscript(model.transcript)
     guard !panel.isVisible else {
       return
     }
-    positionOnActiveScreen()
     panel.orderFrontRegardless()
   }
 
@@ -161,39 +168,65 @@ final class OverlayController {
 
   private func resizeForTranscript(_ transcript: String) {
     let height = OverlayLayout.panelHeight(for: transcript)
-    guard abs(panel.frame.height - height) > 0.5 else {
+    let size = NSSize(width: OverlayLayout.panelWidth, height: height)
+    guard let screen = targetScreen() else {
+      panel.setFrame(
+        NSRect(origin: panel.frame.origin, size: size),
+        display: true
+      )
       return
     }
-
+    let origin = placement.origin(
+      anchor: anchor,
+      preference: preference,
+      panelSize: LayoutSize(size),
+      visibleFrame: LayoutRect(screen.visibleFrame)
+    )
     panel.setFrame(
       NSRect(
-        x: panel.frame.minX,
-        y: panel.frame.minY,
-        width: OverlayLayout.panelWidth,
-        height: height
+        origin: NSPoint(origin),
+        size: size
       ),
       display: true
     )
   }
 
-  private func positionOnActiveScreen() {
-    let mouseLocation = NSEvent.mouseLocation
-    let screen =
-      NSScreen.screens.first { screen in
-        screen.frame.contains(mouseLocation)
-      } ?? NSScreen.main ?? NSScreen.screens.first
-    guard let screen else {
-      return
+  private func targetScreen() -> NSScreen? {
+    if let anchor {
+      let center = NSPoint(x: anchor.rect.midX, y: anchor.rect.midY)
+      return NSScreen.screens.first { $0.frame.contains(center) }
     }
+    let mouseLocation = NSEvent.mouseLocation
+    return NSScreen.screens.first { $0.frame.contains(mouseLocation) }
+      ?? NSScreen.main
+      ?? NSScreen.screens.first
+  }
+}
 
-    let size = panel.frame.size
-    let visibleFrame = screen.visibleFrame
-    panel.setFrameOrigin(
-      NSPoint(
-        x: visibleFrame.midX - size.width / 2,
-        y: visibleFrame.minY + 44
-      )
+private extension LayoutPoint {
+  init(_ point: NSPoint) {
+    self.init(x: point.x, y: point.y)
+  }
+}
+
+private extension LayoutSize {
+  init(_ size: NSSize) {
+    self.init(width: size.width, height: size.height)
+  }
+}
+
+private extension LayoutRect {
+  init(_ rect: NSRect) {
+    self.init(
+      origin: LayoutPoint(rect.origin),
+      size: LayoutSize(rect.size)
     )
+  }
+}
+
+private extension NSPoint {
+  init(_ point: LayoutPoint) {
+    self.init(x: point.x, y: point.y)
   }
 }
 

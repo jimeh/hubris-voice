@@ -10,6 +10,10 @@ final class OverlayControllerTests: XCTestCase {
       onCopy: {},
       onDismiss: {}
     )
+    controller.show(
+      anchor: nil,
+      preference: .bottomOfScreen
+    )
     let initialBottomEdge = controller.panelFrame.minY
 
     model.transcript = String(repeating: "A growing transcript. ", count: 30)

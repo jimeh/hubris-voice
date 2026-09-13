@@ -5,6 +5,7 @@ import HubrisVoiceCore
 
 struct CapturedFocus {
   let snapshot: FocusSnapshot
+  let applicationElement: AXUIElement
   let element: AXUIElement?
 }
 
@@ -48,8 +49,64 @@ final class TextInsertionService {
         },
         isSecure: focusedElement.map(isSecure) ?? false
       ),
+      applicationElement: applicationElement,
       element: focusedElement
     )
+  }
+
+  func captureAnchor(for focus: CapturedFocus?) -> OverlayAnchor? {
+    guard
+      let focus,
+      let primaryScreenHeight = NSScreen.screens.first?.frame.height
+    else {
+      return nil
+    }
+
+    if
+      let element = focus.element,
+      let range = rangeAttribute(
+        kAXSelectedTextRangeAttribute,
+        from: element
+      ),
+      let rect = parameterizedRectAttribute(
+        kAXBoundsForRangeParameterizedAttribute,
+        parameter: range,
+        from: element,
+        primaryScreenHeight: primaryScreenHeight
+      ),
+      rect.size.height > 0,
+      rect.size.width >= 0,
+      containsCenterOnScreen(rect)
+    {
+      return OverlayAnchor(kind: .caret, rect: rect)
+    }
+
+    if
+      let element = focus.element,
+      let rect = rect(
+        for: element,
+        primaryScreenHeight: primaryScreenHeight
+      ),
+      containsCenterOnScreen(rect)
+    {
+      return OverlayAnchor(kind: .element, rect: rect)
+    }
+
+    if
+      let window = copyAXElement(
+        attribute: kAXFocusedWindowAttribute,
+        from: focus.applicationElement
+      ),
+      let rect = rect(
+        for: window,
+        primaryScreenHeight: primaryScreenHeight
+      ),
+      containsCenterOnScreen(rect)
+    {
+      return OverlayAnchor(kind: .window, rect: rect)
+    }
+
+    return nil
   }
 
   // swiftlint:disable:next function_body_length
@@ -206,6 +263,132 @@ final class TextInsertionService {
       return nil
     }
     return range
+  }
+
+  private func parameterizedRectAttribute(
+    _ attribute: String,
+    parameter: CFRange,
+    from element: AXUIElement,
+    primaryScreenHeight: CGFloat
+  ) -> LayoutRect? {
+    var parameter = parameter
+    guard let rangeValue = AXValueCreate(.cfRange, &parameter) else {
+      return nil
+    }
+    var value: CFTypeRef?
+    guard
+      AXUIElementCopyParameterizedAttributeValue(
+        element,
+        attribute as CFString,
+        rangeValue,
+        &value
+      ) == .success,
+      let rect = cgRect(from: value)
+    else {
+      return nil
+    }
+    return LayoutRect.fromTopLeft(
+      x: rect.origin.x,
+      y: rect.origin.y,
+      width: rect.size.width,
+      height: rect.size.height,
+      primaryScreenHeight: primaryScreenHeight
+    )
+  }
+
+  private func rect(
+    for element: AXUIElement,
+    primaryScreenHeight: CGFloat
+  ) -> LayoutRect? {
+    guard
+      let position = cgPointAttribute(
+        kAXPositionAttribute,
+        from: element
+      ),
+      let size = cgSizeAttribute(
+        kAXSizeAttribute,
+        from: element
+      ),
+      size.width > 0,
+      size.height > 0
+    else {
+      return nil
+    }
+    return LayoutRect.fromTopLeft(
+      x: position.x,
+      y: position.y,
+      width: size.width,
+      height: size.height,
+      primaryScreenHeight: primaryScreenHeight
+    )
+  }
+
+  private func cgPointAttribute(
+    _ attribute: String,
+    from element: AXUIElement
+  ) -> CGPoint? {
+    var value: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(
+        element,
+        attribute as CFString,
+        &value
+      ) == .success,
+      let value,
+      CFGetTypeID(value) == AXValueGetTypeID()
+    else {
+      return nil
+    }
+    let pointValue = unsafeDowncast(value, to: AXValue.self)
+    guard AXValueGetType(pointValue) == .cgPoint else {
+      return nil
+    }
+    var point = CGPoint.zero
+    return AXValueGetValue(pointValue, .cgPoint, &point) ? point : nil
+  }
+
+  private func cgSizeAttribute(
+    _ attribute: String,
+    from element: AXUIElement
+  ) -> CGSize? {
+    var value: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(
+        element,
+        attribute as CFString,
+        &value
+      ) == .success,
+      let value,
+      CFGetTypeID(value) == AXValueGetTypeID()
+    else {
+      return nil
+    }
+    let sizeValue = unsafeDowncast(value, to: AXValue.self)
+    guard AXValueGetType(sizeValue) == .cgSize else {
+      return nil
+    }
+    var size = CGSize.zero
+    return AXValueGetValue(sizeValue, .cgSize, &size) ? size : nil
+  }
+
+  private func cgRect(from value: CFTypeRef?) -> CGRect? {
+    guard
+      let value,
+      CFGetTypeID(value) == AXValueGetTypeID()
+    else {
+      return nil
+    }
+    let rectValue = unsafeDowncast(value, to: AXValue.self)
+    guard AXValueGetType(rectValue) == .cgRect else {
+      return nil
+    }
+    var rect = CGRect.zero
+    return AXValueGetValue(rectValue, .cgRect, &rect) ? rect : nil
+  }
+
+  private func containsCenterOnScreen(_ rect: LayoutRect) -> Bool {
+    let center = NSPoint(x: rect.midX, y: rect.midY)
+    return NSScreen.screens.contains { $0.frame.contains(center) }
   }
 
   private func accessibleTextState(

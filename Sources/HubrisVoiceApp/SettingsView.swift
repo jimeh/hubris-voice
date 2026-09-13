@@ -1,4 +1,5 @@
 import AppKit
+import HubrisVoiceCore
 import SwiftUI
 
 struct SettingsView: View {
@@ -48,19 +49,33 @@ struct SettingsView: View {
 
   private var shortcutSection: some View {
     settingSection(title: "Push to talk") {
-      HStack {
-        VStack(alignment: .leading, spacing: 4) {
-          Text("Global shortcut")
-          Text("Hold to record. Release to finalize and paste.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+      VStack(spacing: 12) {
+        HStack {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Global shortcut")
+            Text("Hold to record. Release to finalize and paste.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+          Spacer()
+          Text("⌃⇧Space")
+            .font(.system(.body, design: .monospaced, weight: .semibold))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.slate.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
         }
-        Spacer()
-        Text("⌃⇧Space")
-          .font(.system(.body, design: .monospaced, weight: .semibold))
-          .padding(.horizontal, 10)
-          .padding(.vertical, 6)
-          .background(Color.slate.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+        Divider()
+        HStack {
+          Text("Overlay placement")
+          Spacer()
+          Picker("Overlay placement", selection: $model.overlayPlacement) {
+            Text("Automatic").tag(OverlayPlacementPreference.automatic)
+            Text("Bottom of screen").tag(OverlayPlacementPreference.bottomOfScreen)
+            Text("Top of screen").tag(OverlayPlacementPreference.topOfScreen)
+          }
+          .labelsHidden()
+          .frame(width: 180)
+        }
       }
     }
   }
