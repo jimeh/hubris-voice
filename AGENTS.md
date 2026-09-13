@@ -5,7 +5,8 @@ a Swift package. Use mise as the only project task runner and tool manager.
 
 ## Start here
 
-- Run `mise run setup` after cloning to install pinned tools and Git hooks.
+- Run `mise run treeboot` in a linked worktree to copy local configuration and
+  run setup. Run `mise run setup` directly in the main checkout.
 - Run `mise tasks` to discover the task surface.
 - Run `mise run check` for normal handoff and `mise run verify` for broad or
   release-facing work.
@@ -46,5 +47,6 @@ been observed live versus assumed, lives in
 Read it before changing protocol handling or the dictation state machine, and
 update it when a live run contradicts it.
 
-Product scope, architecture, and manual test coverage live in [PLAN.md](PLAN.md).
-User setup and signing instructions live in [README.md](README.md).
+Current product scope and user setup live in [README.md](README.md). Architecture
+boundaries and the remaining manual test coverage live in
+[docs/plans/2026-09-13-daily-driver.md](docs/plans/2026-09-13-daily-driver.md).

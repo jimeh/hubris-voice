@@ -12,7 +12,7 @@ pre-commit:
 
     - name: toml
       glob: "*.toml"
-      run: mise exec -- taplo format {staged_files} && mise exec -- taplo lint {staged_files} && mise tasks validate
+      run: mise exec -- taplo format {staged_files} && mise exec -- taplo lint mise.toml && treeboot check && mise tasks validate
       stage_fixed: true
 
     - name: swiftlint-config
@@ -26,3 +26,7 @@ pre-commit:
     - name: bundle-metadata
       glob: "*.plist"
       run: plutil -lint {staged_files} && ./Tests/BundleMetadataTests.sh
+
+    - name: github-actions
+      glob: ".github/workflows/*.{yml,yaml}"
+      run: mise run lint:workflows

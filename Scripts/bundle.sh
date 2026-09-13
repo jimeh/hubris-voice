@@ -3,10 +3,20 @@
 set -euo pipefail
 
 configuration="${1:-release}"
+signing_mode="${2:-development}"
 script_dir="${0:A:h}"
 repo_dir="${script_dir:h}"
 artifact_root="${repo_dir}/.build/artifacts"
 app_dir="${artifact_root}/Hubris Voice.app"
+
+case "${signing_mode}" in
+"development" | "adhoc") ;;
+*)
+  print -u2 -- "Usage: ${0:t} [release|debug] [development|adhoc]"
+  exit 2
+  ;;
+esac
+
 stage_root="$(mktemp -d /private/tmp/hubris-voice-bundle.XXXXXX)"
 stage_app="${stage_root}/Hubris Voice.app"
 
@@ -39,7 +49,11 @@ cp "${bin_path}/HubrisVoice" "${stage_app}/Contents/MacOS/HubrisVoice"
 cp "${repo_dir}/Support/Info.plist" "${stage_app}/Contents/Info.plist"
 
 plutil -lint "${stage_app}/Contents/Info.plist"
-signing_identity="$("${repo_dir}/Scripts/resolve-signing-identity.sh")"
+if [[ "${signing_mode}" == "development" ]]; then
+  signing_identity="$("${repo_dir}/Scripts/resolve-signing-identity.sh")"
+else
+  signing_identity="-"
+fi
 codesign \
   --force \
   --sign "${signing_identity}" \
