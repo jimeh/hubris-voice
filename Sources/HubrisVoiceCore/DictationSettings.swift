@@ -18,6 +18,8 @@ public struct DictationSettings: Equatable, Sendable {
     public static let adjustCaseAfterComma = "insertion.adjustCaseAfterComma"
     public static let inputDeviceUID = "audio.inputDeviceUID"
     public static let launchAtLogin = "app.launchAtLogin"
+    public static let shortcuts = "shortcuts.bindings"
+    public static let tapToLock = "shortcuts.tapToLock"
   }
 
   public static let defaultPrompt =
@@ -32,6 +34,8 @@ public struct DictationSettings: Equatable, Sendable {
   public var adjustCaseAfterComma: Bool
   public var inputDeviceUID: String?
   public var launchAtLogin: Bool
+  public var shortcuts: ShortcutSet
+  public var tapToLock: Bool
 
   public init(
     languages: [String] = ["en"],
@@ -42,7 +46,9 @@ public struct DictationSettings: Equatable, Sendable {
     trailingSpace: Bool = true,
     adjustCaseAfterComma: Bool = false,
     inputDeviceUID: String? = nil,
-    launchAtLogin: Bool = false
+    launchAtLogin: Bool = false,
+    shortcuts: ShortcutSet = .init(),
+    tapToLock: Bool = false
   ) {
     self.languages = languages
     self.prompt = prompt
@@ -53,12 +59,18 @@ public struct DictationSettings: Equatable, Sendable {
     self.adjustCaseAfterComma = adjustCaseAfterComma
     self.inputDeviceUID = inputDeviceUID
     self.launchAtLogin = launchAtLogin
+    self.shortcuts = shortcuts
+    self.tapToLock = tapToLock
   }
 
   public static func load(from store: SettingsStore) -> DictationSettings {
     let languages = store.stringArray(Key.language)
       ?? store.string(Key.language).map { [$0] }
       ?? ["en"]
+    let shortcuts = store.string(Key.shortcuts)
+      .flatMap { $0.data(using: .utf8) }
+      .flatMap { try? JSONDecoder().decode(ShortcutSet.self, from: $0) }
+      ?? ShortcutSet()
     return DictationSettings(
       languages: languages,
       prompt: store.string(Key.prompt) ?? defaultPrompt,
@@ -69,7 +81,9 @@ public struct DictationSettings: Equatable, Sendable {
       trailingSpace: store.bool(Key.trailingSpace) ?? true,
       adjustCaseAfterComma: store.bool(Key.adjustCaseAfterComma) ?? false,
       inputDeviceUID: store.string(Key.inputDeviceUID),
-      launchAtLogin: store.bool(Key.launchAtLogin) ?? false
+      launchAtLogin: store.bool(Key.launchAtLogin) ?? false,
+      shortcuts: shortcuts,
+      tapToLock: store.bool(Key.tapToLock) ?? false
     )
   }
 
@@ -83,6 +97,9 @@ public struct DictationSettings: Equatable, Sendable {
     store.set(adjustCaseAfterComma, for: Key.adjustCaseAfterComma)
     store.set(inputDeviceUID, for: Key.inputDeviceUID)
     store.set(launchAtLogin, for: Key.launchAtLogin)
+    let encodedShortcuts = try? JSONEncoder().encode(shortcuts)
+    store.set(encodedShortcuts.flatMap { String(data: $0, encoding: .utf8) }, for: Key.shortcuts)
+    store.set(tapToLock, for: Key.tapToLock)
   }
 
   public var sessionConfiguration: RealtimeSessionConfiguration {

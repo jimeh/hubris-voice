@@ -1,6 +1,9 @@
 @testable import HubrisVoiceCore
 import XCTest
 
+// The transition tests stay together for review against the design contracts.
+// swiftlint:disable file_length
+
 final class DictationSessionTests: XCTestCase {
   func testConnectionLossSchedulesFirstReconnectAttempt() {
     var session = readySession()
@@ -108,6 +111,44 @@ final class DictationSessionTests: XCTestCase {
       [.stopCapture, .clearAudio(generation: 0), .discardSnippet(generation: 0)]
     )
     XCTAssertTrue(session.pending.isEmpty)
+  }
+
+  func testTapToLockKeepsListeningUntilTheNextPress() {
+    let configuration = DictationSession.Configuration(tapToLock: true)
+    var session = readySession(configuration: configuration)
+    _ = session.transition(.pressed)
+
+    XCTAssertEqual(session.transition(.released(heldDuration: 0.1)), [])
+    XCTAssertTrue(session.isLocked)
+    XCTAssertEqual(session.listening?.generation, 0)
+    XCTAssertEqual(session.presentation?.message, "Locked · tap to finish")
+    XCTAssertEqual(session.presentation?.isLocked, true)
+
+    XCTAssertEqual(
+      session.transition(.pressed),
+      [
+        .stopCapture,
+        .commitAudio(generation: 0),
+        .scheduleFinalizingTimeout(generation: 0, after: .seconds(8)),
+      ]
+    )
+    XCTAssertFalse(session.isLocked)
+    XCTAssertNil(session.listening)
+    XCTAssertEqual(session.transition(.released(heldDuration: 0.1)), [])
+  }
+
+  func testCancelWhileLockedClearsTheLock() {
+    let configuration = DictationSession.Configuration(tapToLock: true)
+    var session = readySession(configuration: configuration)
+    _ = session.transition(.pressed)
+    _ = session.transition(.released(heldDuration: 0.1))
+
+    XCTAssertEqual(
+      session.transition(.cancelRequested),
+      [.stopCapture, .clearAudio(generation: 0), .discardSnippet(generation: 0)]
+    )
+    XCTAssertFalse(session.isLocked)
+    XCTAssertNil(session.listening)
   }
 
   func testPressWhileDisconnectedCapturesImmediatelyThenReplaysWhenReady() {
@@ -354,6 +395,26 @@ final class DictationSessionTests: XCTestCase {
     _ = session.transition(.pressed)
 
     XCTAssertEqual(session.transition(.pasteHereRequested), [])
+    XCTAssertEqual(session.listening?.generation, 0)
+    XCTAssertTrue(session.inserting.isEmpty)
+  }
+
+  func testPasteLastAllocatesGenerationAndInsertsAtCurrentFocus() {
+    var session = readySession()
+
+    XCTAssertEqual(
+      session.transition(.pasteLastRequested(text: "hello")),
+      [.cancelDismiss, .insertAtCurrentFocus(generation: 0, text: "hello")]
+    )
+    XCTAssertEqual(session.inserting, [.init(generation: 0, transcript: "hello")])
+    XCTAssertEqual(session.nextGeneration, 1)
+  }
+
+  func testPasteLastWhileListeningIsIgnored() {
+    var session = readySession()
+    _ = session.transition(.pressed)
+
+    XCTAssertEqual(session.transition(.pasteLastRequested(text: "hello")), [])
     XCTAssertEqual(session.listening?.generation, 0)
     XCTAssertTrue(session.inserting.isEmpty)
   }

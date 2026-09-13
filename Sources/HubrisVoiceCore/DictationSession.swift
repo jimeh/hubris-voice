@@ -19,6 +19,7 @@ public struct OverlayPresentation: Equatable, Sendable {
   public let canPasteHere: Bool
   public let canDismiss: Bool
   public let pendingCount: Int
+  public let isLocked: Bool
 
   public init(
     mode: Mode,
@@ -27,7 +28,8 @@ public struct OverlayPresentation: Equatable, Sendable {
     canCopy: Bool,
     canPasteHere: Bool,
     canDismiss: Bool,
-    pendingCount: Int
+    pendingCount: Int,
+    isLocked: Bool = false
   ) {
     self.mode = mode
     self.transcript = transcript
@@ -36,6 +38,7 @@ public struct OverlayPresentation: Equatable, Sendable {
     self.canPasteHere = canPasteHere
     self.canDismiss = canDismiss
     self.pendingCount = pendingCount
+    self.isLocked = isLocked
   }
 }
 
@@ -80,6 +83,7 @@ public struct DictationSession: Equatable, Sendable {
     case dismissRequested
     case copied
     case pasteHereRequested
+    case pasteLastRequested(text: String)
     case connectRequested(force: Bool)
     case credentialsChanged(hasKey: Bool)
     case localError(message: String)
@@ -124,6 +128,7 @@ public struct DictationSession: Equatable, Sendable {
     public var attentionLinger: Duration
     public var maximumPendingSnippets: Int
     public var reconnect: ReconnectPolicy
+    public var tapToLock: Bool
 
     public init(
       minimumHoldDuration: TimeInterval = 0.2,
@@ -131,7 +136,8 @@ public struct DictationSession: Equatable, Sendable {
       copiedLinger: Duration = .milliseconds(850),
       attentionLinger: Duration = .seconds(4),
       maximumPendingSnippets: Int = 4,
-      reconnect: ReconnectPolicy = .init()
+      reconnect: ReconnectPolicy = .init(),
+      tapToLock: Bool = false
     ) {
       self.minimumHoldDuration = minimumHoldDuration
       self.finalizingTimeout = finalizingTimeout
@@ -139,6 +145,7 @@ public struct DictationSession: Equatable, Sendable {
       self.attentionLinger = attentionLinger
       self.maximumPendingSnippets = maximumPendingSnippets
       self.reconnect = reconnect
+      self.tapToLock = tapToLock
     }
   }
 
@@ -148,13 +155,18 @@ public struct DictationSession: Equatable, Sendable {
   public private(set) var inserting: [Snippet] = []
   public private(set) var presented: PresentedResult?
   public private(set) var nextGeneration = 0
+  public private(set) var isLocked = false
 
-  private let configuration: Configuration
+  private var configuration: Configuration
   private var wasCopied = false
 
   public init(configuration: Configuration = .init(), hasKey: Bool) {
     self.configuration = configuration
     connection = hasKey ? .disconnected(attempt: 0) : .unconfigured
+  }
+
+  public mutating func setTapToLock(_ enabled: Bool) {
+    configuration.tapToLock = enabled
   }
 
   // swiftlint:disable:next cyclomatic_complexity
@@ -189,6 +201,8 @@ public struct DictationSession: Equatable, Sendable {
       return copied()
     case .pasteHereRequested:
       return pasteHereRequested()
+    case .pasteLastRequested(let text):
+      return pasteLastRequested(text: text)
     case .localError(let message):
       return localError(message: message)
     case .server(let serverEvent):
@@ -209,11 +223,15 @@ public struct DictationSession: Equatable, Sendable {
 
   public var presentation: OverlayPresentation? {
     if let listening {
-      let message = switch connection {
-      case .ready: "Release to insert"
-      case .connecting: "Connecting…"
-      case .disconnected: "Reconnecting…"
-      case .unconfigured: "Add an OpenAI API key before dictating."
+      let message = if isLocked {
+        "Locked · tap to finish"
+      } else {
+        switch connection {
+        case .ready: "Release to insert"
+        case .connecting: "Connecting…"
+        case .disconnected: "Reconnecting…"
+        case .unconfigured: "Add an OpenAI API key before dictating."
+        }
       }
       return OverlayPresentation(
         mode: .listening,
@@ -222,7 +240,8 @@ public struct DictationSession: Equatable, Sendable {
         canCopy: false,
         canPasteHere: false,
         canDismiss: false,
-        pendingCount: pending.count
+        pendingCount: pending.count,
+        isLocked: isLocked
       )
     }
     if let presented {
@@ -351,6 +370,9 @@ private extension DictationSession {
   }
 
   mutating func pressed() -> [Effect] {
+    if listening != nil, isLocked {
+      return releaseListeningSnippet()
+    }
     guard connection != .unconfigured else {
       setPresented(.error(message: "Add an OpenAI API key before dictating.", text: ""))
       return [.scheduleDismiss(after: configuration.attentionLinger)]
@@ -378,7 +400,12 @@ private extension DictationSession {
   mutating func released(heldDuration: TimeInterval) -> [Effect] {
     guard let listening else { return [] }
     guard heldDuration >= configuration.minimumHoldDuration else {
+      if configuration.tapToLock {
+        isLocked = true
+        return []
+      }
       self.listening = nil
+      isLocked = false
       return [
         .stopCapture,
         .clearAudio(generation: listening.generation),
@@ -391,6 +418,7 @@ private extension DictationSession {
   mutating func releaseListeningSnippet() -> [Effect] {
     guard let listening else { return [] }
     self.listening = nil
+    isLocked = false
     pending.append(listening)
     var effects: [Effect] = [.stopCapture]
     if connection == .ready {
@@ -408,6 +436,7 @@ private extension DictationSession {
   mutating func cancelRequested() -> [Effect] {
     if let listening {
       self.listening = nil
+      isLocked = false
       return [
         .stopCapture,
         .clearAudio(generation: listening.generation),
@@ -457,15 +486,12 @@ private extension DictationSession {
     }
     guard !text.isEmpty else { return [] }
 
-    let generation = nextGeneration
-    nextGeneration += 1
-    inserting.append(Snippet(generation: generation, transcript: text))
-    self.presented = nil
-    wasCopied = false
-    return [
-      .cancelDismiss,
-      .insertAtCurrentFocus(generation: generation, text: text),
-    ]
+    return beginCurrentFocusInsertion(text: text)
+  }
+
+  mutating func pasteLastRequested(text: String) -> [Effect] {
+    guard listening == nil, !text.isEmpty else { return [] }
+    return beginCurrentFocusInsertion(text: text)
   }
 
   mutating func localError(message: String) -> [Effect] {
@@ -474,6 +500,7 @@ private extension DictationSession {
       return [.scheduleDismiss(after: configuration.attentionLinger)]
     }
     self.listening = nil
+    isLocked = false
     setPresented(.error(message: message, text: listening.transcript))
     var effects: [Effect] = [
       .stopCapture,
@@ -543,6 +570,7 @@ private extension DictationSession {
     var effects: [Effect] = []
     if let listening {
       self.listening = nil
+      isLocked = false
       effects += [
         .stopCapture,
         .clearAudio(generation: listening.generation),
@@ -597,6 +625,18 @@ private extension DictationSession {
   mutating func setPresented(_ result: PresentedResult) {
     presented = result
     wasCopied = false
+  }
+
+  mutating func beginCurrentFocusInsertion(text: String) -> [Effect] {
+    let generation = nextGeneration
+    nextGeneration += 1
+    inserting.append(Snippet(generation: generation, transcript: text))
+    presented = nil
+    wasCopied = false
+    return [
+      .cancelDismiss,
+      .insertAtCurrentFocus(generation: generation, text: text),
+    ]
   }
 
   /// A new socket re-transcribes replayed audio from scratch, so live item IDs

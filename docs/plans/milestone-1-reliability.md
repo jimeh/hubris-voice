@@ -26,7 +26,7 @@ After this milestone:
 ## Architecture
 
 ```text
-PushToTalkMonitor ─ press/release/cancel ─┐
+ShortcutMonitor ─ role/action ────────────┐
 AudioCapture ─ chunks, levels ────────────┤
 RealtimeTranscriptionClient ─ events ─────┤       ┌─ AudioCapture start/stop
 Timers, wake, network ────────────────────┼─► AppModel ─► DictationSession.transition(event)
@@ -83,6 +83,7 @@ public struct DictationSession: Equatable, Sendable {
     case dismissRequested             // Dismiss button, Escape while presenting
     case copied                       // Copy button pressed
     case pasteHereRequested           // Return while a recoverable result is presented
+    case pasteLastRequested(text: String)
     case connectRequested(force: Bool)
     case credentialsChanged(hasKey: Bool)
     case localError(message: String)  // permission or capture failures from the app
@@ -126,6 +127,7 @@ public struct DictationSession: Equatable, Sendable {
     public var attentionLinger: Duration = .seconds(4)
     public var maximumPendingSnippets: Int = 4
     public var reconnect: ReconnectPolicy = .init()
+    public var tapToLock: Bool = false
   }
 
   public private(set) var connection: ConnectionState
@@ -134,6 +136,7 @@ public struct DictationSession: Equatable, Sendable {
   public private(set) var inserting: [Snippet]    // completed, insertion in flight
   public private(set) var presented: PresentedResult?
   public private(set) var nextGeneration: Int
+  public private(set) var isLocked: Bool
 
   public init(configuration: Configuration = .init(), hasKey: Bool)
   public mutating func transition(_ event: Event) -> [Effect]
@@ -218,13 +221,15 @@ Snippet events:
 
 | Event | Condition | Result | Effects |
 | --- | --- | --- | --- |
+| `pressed` | `listening != nil`, `isLocked` | snippet moves to `pending`, `isLocked = false` | as a normal long release |
 | `pressed` | `connection == .unconfigured` | `presented = .error("Add an OpenAI API key before dictating.", "")` | `scheduleDismiss(attentionLinger)` |
-| `pressed` | `listening != nil` | unchanged | none |
+| `pressed` | `listening != nil`, not locked | unchanged | none |
 | `pressed` | `pending.count + inserting.count >= maximumPendingSnippets` | `presented = .error("Waiting for previous transcripts.", "")` | `scheduleDismiss(attentionLinger)` |
 | `pressed` | `connection == .ready` or `.connecting` | new listening snippet, `presented = nil` | `cancelDismiss`, `startCapture(g)` |
 | `pressed` | `connection == .disconnected` | new listening snippet, `connection = .connecting(0)`, `presented = nil` | `cancelDismiss`, `cancelReconnect`, `connect(0)`, `startCapture(g)` |
 | `released(held)` | `listening == nil` | unchanged | none |
-| `released(held)` | `held < minimumHoldDuration` | `listening = nil` | `stopCapture`, `clearAudio(g)`, `discardSnippet(g)` |
+| `released(held)` | `held < minimumHoldDuration`, `tapToLock` | `isLocked = true`; keep listening | none |
+| `released(held)` | `held < minimumHoldDuration`, tap-to-lock off | `listening = nil` | `stopCapture`, `clearAudio(g)`, `discardSnippet(g)` |
 | `released(held)` | otherwise | snippet moves to `pending` | `stopCapture`, `commitAudio(g)` only if `connection == .ready`, `scheduleFinalizingTimeout(g, finalizingTimeout)` |
 | `bufferFull(g)` | `listening?.generation == g` | as `released` with a long hold | as `released`, plus `presented` unchanged |
 | `cancelRequested` | `listening != nil` | `listening = nil` | `stopCapture`, `clearAudio(g)`, `discardSnippet(g)` |
@@ -234,6 +239,8 @@ Snippet events:
 | `dismissRequested` | `presented != nil` | `presented = nil` | `cancelDismiss` |
 | `copied` | `presented` has text | `presented` stays but mode becomes `copied` (track with a flag) | `cancelDismiss`, `scheduleDismiss(copiedLinger)` |
 | `pasteHereRequested` | `presented` is non-empty `.attempted`, `.rejected`, or `.timedOut` | allocate a new generation, move its text to `inserting`, clear `presented` | `cancelDismiss`, `insertAtCurrentFocus(g, text)` |
+| `pasteLastRequested(text)` | not listening, `text` non-empty | allocate a new generation, move `text` to `inserting`, clear `presented` | `cancelDismiss`, `insertAtCurrentFocus(g, text)` |
+| `pasteLastRequested(text)` | listening or `text` empty | unchanged | none |
 | `localError(m)` | `listening != nil` | `listening = nil`, `presented = .error(m, transcript)` | `stopCapture`, `clearAudio(g)`, `discardSnippet(g)`, `scheduleDismiss(attentionLinger)` if transcript empty |
 | `localError(m)` | otherwise | `presented = .error(m, "")` | `scheduleDismiss(attentionLinger)` |
 | `server(.inputCommitted(id))` | first pending snippet with `itemID == nil` exists | that snippet gets `itemID` | none |
@@ -259,6 +266,11 @@ Notes:
   result. `pendingCount` lets the overlay hint that work is queued.
 - `insert` carries only the generation and text. The app looks up the focus
   captured at press time by generation.
+- Every path that ends listening clears `isLocked`. While locked, the listening
+  presentation uses "Locked · tap to finish" and sets `isLocked` for the
+  overlay lock glyph.
+- Paste-last insertion outcomes use the same presentation as recovery paste.
+  The app also copies paste-last text when insertion is rejected.
 
 ### `ReconnectPolicy.swift`
 

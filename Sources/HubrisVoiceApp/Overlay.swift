@@ -48,6 +48,7 @@ final class OverlayViewModel: ObservableObject {
   @Published var canPasteHere = false
   @Published var canDismiss = false
   @Published var pendingCount = 0
+  @Published var isLocked = false
 
   var transcriptViewportHeight: CGFloat {
     OverlayLayout.transcriptViewportHeight(for: transcript)
@@ -63,6 +64,7 @@ final class OverlayViewModel: ObservableObject {
     canPasteHere = false
     canDismiss = false
     pendingCount = 0
+    isLocked = false
   }
 
   func apply(_ presentation: OverlayPresentation) {
@@ -79,6 +81,7 @@ final class OverlayViewModel: ObservableObject {
     canPasteHere = presentation.canPasteHere
     canDismiss = presentation.canDismiss
     pendingCount = presentation.pendingCount
+    isLocked = presentation.isLocked
   }
 
   func record(level: Float) {
@@ -251,6 +254,12 @@ private struct OverlayView: View {
           .frame(width: 8, height: 8)
         Text(model.mode.title)
           .font(.system(size: 13, weight: .semibold, design: .rounded))
+        if model.isLocked {
+          Image(systemName: "lock.fill")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(model.mode.color)
+            .accessibilityLabel("Recording locked")
+        }
         Spacer()
         Text(timeLabel)
           .font(.system(size: 11, weight: .medium, design: .monospaced))

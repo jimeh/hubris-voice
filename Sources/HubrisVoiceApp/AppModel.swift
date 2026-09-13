@@ -96,13 +96,35 @@ final class AppModel: ObservableObject {
     }
   }
 
+  @Published var shortcuts: ShortcutSet {
+    didSet {
+      guard shortcuts != oldValue else { return }
+      updateSettings { $0.shortcuts = shortcuts }
+      applyShortcutSet(shortcuts)
+    }
+  }
+
+  @Published var tapToLock: Bool {
+    didSet {
+      guard tapToLock != oldValue else { return }
+      updateSettings { $0.tapToLock = tapToLock }
+      session.setTapToLock(tapToLock)
+    }
+  }
+
   @Published private(set) var requiresApproval: Bool
   @Published private(set) var lastConfirmedAt: Date?
+  @Published private(set) var lastTranscript: String?
+  @Published private(set) var shortcutConflict: String?
+  @Published private(set) var lastAttentionAt: Date?
 
   let overlayModel = OverlayViewModel()
   weak var overlayController: OverlayController?
 
   var menuSystemImage: String {
+    if lastAttentionAt != nil {
+      return "exclamationmark.circle"
+    }
     if lastConfirmedAt != nil {
       return "checkmark.circle"
     }
@@ -140,7 +162,7 @@ final class AppModel: ObservableObject {
 
   private let client = RealtimeTranscriptionClient()
   private let audioCapture = AudioCapture()
-  private let shortcutMonitor = PushToTalkMonitor()
+  private let shortcutMonitor = ShortcutMonitor()
   private let insertionService = TextInsertionService()
   private let keychain = KeychainStore()
   private let loginItemService = LoginItemService()
@@ -163,7 +185,7 @@ final class AppModel: ObservableObject {
   private var stopCaptureTask: Task<Void, Never>?
   private var permissionPollingTask: Task<Void, Never>?
   private var transportTask: Task<Void, Never>?
-  private var wakeObserver: NSObjectProtocol?
+  private var workspaceObservers: [NSObjectProtocol] = []
   private var recordingStartedAt: Date?
   private var releasedAt: [Int: Date] = [:]
   private var isStarted = false
@@ -173,6 +195,8 @@ final class AppModel: ObservableObject {
   private var configurationUpdateScheduled = false
   private var pendingConfigurationAcks = 0
   private var isRefreshingLoginItemStatus = false
+  private var didWarnForFnBinding = false
+  private var pasteLastInsertionGenerations: Set<Int> = []
 
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
@@ -198,9 +222,15 @@ final class AppModel: ObservableObject {
     inputDevices = AudioCapture.availableInputDevices()
     inputDeviceUID = settings.inputDeviceUID
     launchAtLogin = loginItemStatus == .enabled
+    shortcuts = settings.shortcuts
+    tapToLock = settings.tapToLock
     requiresApproval = loginItemStatus == .requiresApproval
     lastConfirmedAt = nil
+    lastTranscript = nil
+    shortcutConflict = Self.conflictMessage(for: settings.shortcuts)
+    lastAttentionAt = nil
     session = DictationSession(
+      configuration: .init(tapToLock: settings.tapToLock),
       hasKey: !storedAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     )
     phaseTitle = session.phaseTitle
@@ -221,14 +251,8 @@ final class AppModel: ObservableObject {
     audioCapture.onDevicesChanged = { [weak self] in
       Task { @MainActor [weak self] in self?.refreshInputDevices() }
     }
-    shortcutMonitor.onPress = { [weak self] in
-      Task { @MainActor [weak self] in self?.handlePress() }
-    }
-    shortcutMonitor.onRelease = { [weak self] in
-      Task { @MainActor [weak self] in self?.handleRelease() }
-    }
-    shortcutMonitor.onCancel = { [weak self] in
-      Task { @MainActor [weak self] in self?.apply(.cancelRequested) }
+    shortcutMonitor.onAction = { [weak self] role, action in
+      Task { @MainActor [weak self] in self?.handleShortcut(role: role, action: action) }
     }
     shortcutMonitor.onEscape = { [weak self] in
       Task { @MainActor [weak self] in self?.apply(.cancelRequested) }
@@ -236,6 +260,10 @@ final class AppModel: ObservableObject {
     shortcutMonitor.onReturn = { [weak self] in
       Task { @MainActor [weak self] in self?.handleReturn() }
     }
+    shortcutMonitor.onTapDisabled = { [weak self] in
+      Task { @MainActor [weak self] in self?.cancelLockedRecording() }
+    }
+    applyShortcutSet(settings.shortcuts)
   }
 
   func start() {
@@ -398,6 +426,18 @@ final class AppModel: ObservableObject {
     apply(.pasteHereRequested)
   }
 
+  func setShortcut(_ binding: ShortcutBinding?, for role: ShortcutRole) {
+    var updated = shortcuts
+    switch role {
+    case .pushToTalk:
+      guard let binding else { return }
+      updated.pushToTalk = binding
+    case .pasteLastTranscript:
+      updated.pasteLastTranscript = binding
+    }
+    shortcuts = updated
+  }
+
   private func updateSettings(
     _ update: (inout DictationSettings) -> Void
   ) {
@@ -461,6 +501,13 @@ final class AppModel: ObservableObject {
   }
 
   private func apply(_ event: DictationSession.Event) {
+    let rejectedPasteLastText: String? =
+      if case .insertionFinished(let generation, .rejected, _) = event,
+      pasteLastInsertionGenerations.contains(generation) {
+        session.inserting.first { $0.generation == generation }?.transcript
+      } else {
+        nil
+      }
     let insertionTelemetry: InsertionTelemetry? =
       if case .insertionFinished(let generation, let outcome, _) = event,
       session.inserting.contains(where: { $0.generation == generation }) {
@@ -482,6 +529,12 @@ final class AppModel: ObservableObject {
     let effects = session.transition(event)
     for effect in effects {
       interpret(effect)
+    }
+    if let rejectedPasteLastText {
+      insertionService.copy(rejectedPasteLastText)
+    }
+    if case .insertionFinished(let generation, _, _) = event {
+      pasteLastInsertionGenerations.remove(generation)
     }
     if let insertionTelemetry {
       if insertionTelemetry.outcome == .confirmed {
@@ -550,6 +603,10 @@ final class AppModel: ObservableObject {
   }
 
   private func handlePress() {
+    if session.isLocked {
+      apply(.pressed)
+      return
+    }
     let hasKey = !apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     guard hasKey else {
       apply(.pressed)
@@ -560,6 +617,37 @@ final class AppModel: ObservableObject {
       return
     }
     apply(.pressed)
+  }
+
+  private func handleShortcut(
+    role: ShortcutRole,
+    action: ShortcutGesture.Action
+  ) {
+    switch (role, action) {
+    case (.pushToTalk, .pressed):
+      handlePress()
+    case (.pushToTalk, .released):
+      handleRelease()
+    case (.pushToTalk, .cancelled):
+      apply(.cancelRequested)
+    case (.pasteLastTranscript, .pressed):
+      pasteLastTranscriptAtCurrentFocus()
+    case (_, .ignored), (_, .consumed), (.pasteLastTranscript, .released),
+         (.pasteLastTranscript, .cancelled):
+      break
+    }
+  }
+
+  private func pasteLastTranscriptAtCurrentFocus() {
+    guard let lastTranscript else {
+      flashAttention()
+      return
+    }
+    let generation = session.nextGeneration
+    apply(.pasteLastRequested(text: lastTranscript))
+    if session.inserting.contains(where: { $0.generation == generation }) {
+      pasteLastInsertionGenerations.insert(generation)
+    }
   }
 
   private func handleRelease() {
@@ -579,6 +667,21 @@ final class AppModel: ObservableObject {
     }
   }
 
+  private func cancelLockedRecording() {
+    guard session.isLocked else { return }
+    apply(.cancelRequested)
+  }
+
+  private func flashAttention() {
+    let attentionAt = Date()
+    lastAttentionAt = attentionAt
+    Task { @MainActor [weak self] in
+      try? await Task.sleep(for: .milliseconds(1_200))
+      guard let self, lastAttentionAt == attentionAt else { return }
+      lastAttentionAt = nil
+    }
+  }
+
   private func handleReturn() {
     if session.presentation?.canPasteHere == true {
       apply(.pasteHereRequested)
@@ -588,6 +691,9 @@ final class AppModel: ObservableObject {
   }
 
   private func handle(_ event: RealtimeTransportEvent) {
+    if case .server(.transcriptCompleted(_, let transcript)) = event {
+      lastTranscript = transcript
+    }
     switch event {
     case .server(.sessionReady):
       pendingConfigurationAcks = max(
@@ -765,13 +871,24 @@ final class AppModel: ObservableObject {
   }
 
   private func observeReconnectSignals() {
-    wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+    let wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
       forName: NSWorkspace.didWakeNotification,
       object: nil,
       queue: .main
     ) { [weak self] _ in
       Task { @MainActor [weak self] in self?.apply(.connectRequested(force: false)) }
     }
+    let sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+      forName: NSWorkspace.willSleepNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      Task { @MainActor [weak self] in
+        self?.shortcutMonitor.cancelAll()
+        self?.cancelLockedRecording()
+      }
+    }
+    workspaceObservers = [wakeObserver, sleepObserver]
     networkMonitor.pathUpdateHandler = { [weak self] path in
       guard path.status == .satisfied else { return }
       Task { @MainActor [weak self] in self?.apply(.connectRequested(force: false)) }
@@ -790,6 +907,28 @@ final class AppModel: ObservableObject {
     }
   }
 
+  private func applyShortcutSet(_ shortcuts: ShortcutSet) {
+    shortcutConflict = Self.conflictMessage(for: shortcuts)
+    var applied = shortcuts
+    if shortcutConflict != nil {
+      applied.pasteLastTranscript = nil
+    }
+    shortcutMonitor.apply(applied)
+    guard !didWarnForFnBinding, shortcuts.containsFnBinding else { return }
+    didWarnForFnBinding = true
+    Task {
+      await DiagnosticLog.shared.record(
+        "Fn shortcut configured; macOS or keyboard firmware may route Fn before the event tap"
+      )
+    }
+  }
+
+  private static func conflictMessage(for shortcuts: ShortcutSet) -> String? {
+    shortcuts.conflicts().isEmpty
+      ? nil
+      : "Push to Talk and Paste Last Transcript use the same shortcut."
+  }
+
   private func updateLoginItem(enabled: Bool) {
     settingsMessage = nil
     do {
@@ -802,6 +941,15 @@ final class AppModel: ObservableObject {
       settingsMessage = error.localizedDescription
     }
     refreshLoginItemStatus()
+  }
+}
+
+private extension ShortcutSet {
+  var containsFnBinding: Bool {
+    if pushToTalk == .modifier(.fn) {
+      return true
+    }
+    return pasteLastTranscript == .modifier(.fn)
   }
 }
 

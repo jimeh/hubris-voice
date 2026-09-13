@@ -16,13 +16,28 @@ final class DictationSettingsTests: XCTestCase {
       trailingSpace: false,
       adjustCaseAfterComma: true,
       inputDeviceUID: "microphone-1",
-      launchAtLogin: true
+      launchAtLogin: true,
+      shortcuts: ShortcutSet(
+        pushToTalk: .modifier(.rightCommand),
+        pasteLastTranscript: .chord(
+          GlobalShortcut(keyCode: 8, modifiers: [.control, .option])
+        )
+      ),
+      tapToLock: true
     )
     let store = MemorySettingsStore()
 
     expected.save(to: store)
 
     XCTAssertEqual(DictationSettings.load(from: store), expected)
+  }
+
+  func testInvalidShortcutJSONFallsBackToDefault() {
+    let store = MemorySettingsStore(values: [
+      DictationSettings.Key.shortcuts: "not-json",
+    ])
+
+    XCTAssertEqual(DictationSettings.load(from: store).shortcuts, ShortcutSet())
   }
 
   func testLoadMigratesTheExistingSingularLanguageValue() {
