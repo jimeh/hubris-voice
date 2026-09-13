@@ -565,7 +565,7 @@ final class AppModel: ObservableObject {
 
   private func sendConfigurationUpdateWhenIdle() {
     configurationUpdateScheduled = false
-    guard session.listening == nil, session.pending.isEmpty else {
+    guard session.connection == .ready, session.listening == nil, session.pending.isEmpty else {
       configurationUpdateDeferred = true
       return
     }
@@ -584,6 +584,7 @@ final class AppModel: ObservableObject {
       guard let self else { return }
       let sent = await client.updateSession(configuration)
       if !sent, attemptID == transportAttemptID {
+        configurationUpdateDeferred = true
         pendingConfigurationAcks = max(
           0,
           pendingConfigurationAcks - 1

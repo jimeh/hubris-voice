@@ -145,6 +145,7 @@ public struct DictationSession: Equatable, Sendable {
 
   // Keep committed generations until their ACK arrives, even after cancel or timeout.
   private var awaitingCommitAcknowledgements: [Int] = []
+  private var assignedItemIDs: Set<String> = []
   private var configuration: Configuration
   public init(configuration: Configuration = .init(), hasKey: Bool) {
     self.configuration = configuration
@@ -464,6 +465,7 @@ private extension DictationSession {
     case .sessionReady:
       return sessionBecameReady()
     case .inputCommitted(let itemID):
+      assignedItemIDs.insert(itemID)
       guard !awaitingCommitAcknowledgements.isEmpty else { return [] }
       let generation = awaitingCommitAcknowledgements.removeFirst()
       guard let index = pending.firstIndex(where: { $0.generation == generation }) else { return [] }
@@ -476,7 +478,13 @@ private extension DictationSession {
       }
       // The server streams deltas for the uncommitted buffer while recording,
       // so the first live delta names the item the listening snippet will commit.
-      guard listening != nil, listening?.itemID == nil || listening?.itemID == itemID else { return [] }
+      guard listening != nil else { return [] }
+      if listening?.itemID != itemID {
+        guard listening?.itemID == nil,
+              !assignedItemIDs.contains(itemID), awaitingCommitAcknowledgements.isEmpty
+        else { return [] }
+      }
+      assignedItemIDs.insert(itemID)
       listening?.itemID = itemID
       listening?.transcript += delta
       return []
@@ -580,6 +588,7 @@ private extension DictationSession {
   /// and their partial transcripts are both stale.
   mutating func clearPendingItemIDs() {
     awaitingCommitAcknowledgements.removeAll()
+    assignedItemIDs.removeAll()
     for index in pending.indices {
       pending[index].itemID = nil
       pending[index].transcript = ""
