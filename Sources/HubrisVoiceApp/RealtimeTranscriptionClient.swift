@@ -503,7 +503,7 @@ private extension RealtimeServerEvent {
       "transcript.delta"
     case .transcriptCompleted:
       "transcript.completed"
-    case .error(let message):
+    case .error(let message, _):
       "server.error message=\(message)"
     case .ignored(let type):
       "ignored.\(type)"

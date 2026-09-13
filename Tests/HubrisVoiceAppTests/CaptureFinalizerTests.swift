@@ -18,6 +18,16 @@ final class CaptureFinalizerTests: XCTestCase {
     XCTAssertEqual(events.count, 5)
   }
 
+  func testRapidRestartCommitsWithoutStoppingTheEngine() {
+    let finalizer = CaptureFinalizer()
+    var events: [String] = []
+    finalizer.schedule(generation: 1) { events.append("stop") }
+    finalizer.commitAfterStop(generation: 1) { events.append("commit") }
+    finalizer.finish(keepingCaptureRunning: true)
+    finalizer.finish()
+    XCTAssertEqual(events, ["commit"])
+  }
+
   func testReplayCommitIsNotDelayedByAnotherGeneration() {
     let finalizer = CaptureFinalizer()
     var events: [String] = []

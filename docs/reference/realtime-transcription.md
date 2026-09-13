@@ -79,6 +79,10 @@ the live API, [assumed] not yet confirmed either way.
 - [docs] `input_audio_buffer.commit` ends the current turn. The server
   answers `input_audio_buffer.committed` with the `item_id` of the
   conversation item created from the buffer.
+- [docs] An empty commit produces an error. `error.event_id`, when present,
+  identifies the client event that failed. The app maps commit event IDs back
+  to their generation and removes rejected commits from its acknowledgement
+  queue, including after local cancellation or timeout.
 - [docs] `input_audio_buffer.clear` discards the uncommitted buffer.
 - [observed] Audio appended before `session.updated` is dropped by the
   client. After a reconnect the server has no memory of earlier audio, so

@@ -3,6 +3,12 @@ import Foundation
 import XCTest
 
 final class RealtimeProtocolTests: XCTestCase {
+  func testErrorPreservesTheClientEventID() throws {
+    let data = Data(#"{"type":"error","event_id":"server","error":{"message":"Empty buffer","event_id":"commit"}}"#
+      .utf8)
+    XCTAssertEqual(try RealtimeServerEvent.decode(data), .error(message: "Empty buffer", eventID: "commit"))
+  }
+
   func testEndpointDeclaresTranscriptionIntentWithoutSessionModel() throws {
     let endpoint = try XCTUnwrap(RealtimeAPI.endpoint)
     let components = try XCTUnwrap(

@@ -82,6 +82,7 @@ public struct DictationSession: Equatable, Sendable {
     case server(RealtimeServerEvent)
     case reconnectDelayElapsed(attempt: Int)
     case finalizingTimedOut(generation: Int)
+    case commitRejected(generation: Int, message: String)
     case dismissDelayElapsed
     case insertionFinished(
       generation: Int,
@@ -202,6 +203,16 @@ public struct DictationSession: Equatable, Sendable {
       return handle(serverEvent)
     case .finalizingTimedOut(let generation):
       return finalizingTimedOut(generation: generation)
+    case .commitRejected(let generation, let message):
+      awaitingCommitAcknowledgements.removeAll { $0 == generation }
+      guard let index = pending.firstIndex(where: { $0.generation == generation }) else { return [] }
+      let snippet = pending.remove(at: index)
+      setPresented(.error(message: message, text: snippet.transcript))
+      return [
+        .cancelFinalizingTimeout(generation: generation),
+        .discardSnippet(generation: generation),
+        .scheduleDismiss(after: configuration.attentionLinger),
+      ]
     case .dismissDelayElapsed:
       guard presented != nil else {
         return []
@@ -490,7 +501,7 @@ private extension DictationSession {
       return []
     case .transcriptCompleted(let itemID, let transcript):
       return transcriptCompleted(itemID: itemID, transcript: transcript)
-    case .error(let message):
+    case .error(let message, _):
       return serverError(message: message)
     case .ignored:
       return []

@@ -48,6 +48,24 @@ final class DictationRecoveryTests: XCTestCase {
     }
   }
 
+  func testRejectedCommitDoesNotConsumeTheNextAcknowledgement() {
+    for timedOut in [true, false] {
+      var session = readySession()
+      _ = session.transition(.pressed)
+      _ = session.transition(.released(heldDuration: 1))
+      if timedOut {
+        _ = session.transition(.finalizingTimedOut(generation: 0))
+      }
+      _ = session.transition(.pressed)
+      _ = session.transition(.commitRejected(generation: 0, message: "Empty buffer"))
+      XCTAssertEqual(session.listening?.generation, 1)
+      _ = session.transition(.released(heldDuration: 1))
+      _ = session.transition(.server(.inputCommitted(itemID: "next")))
+      XCTAssertTrue(session.transition(.server(.transcriptCompleted(itemID: "next", transcript: "Recovered")))
+        .contains(.insert(generation: 1, text: "Recovered")))
+    }
+  }
+
   private func readySession() -> DictationSession {
     var session = DictationSession(hasKey: true)
     _ = session.transition(.connectRequested(force: false))

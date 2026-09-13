@@ -258,6 +258,7 @@ final class AppModel: ObservableObject {
   private var permissionPollingTask: Task<Void, Never>?
   private var transportTask: Task<Void, Never>?
   private var transportAttemptID: String?
+  private var commitGenerations: [String: Int] = [:]
   private var workspaceObservers: [NSObjectProtocol] = []
   private var recordingStartedAt: Date?
   private var releasedAt: [Int: Date] = [:]
@@ -802,8 +803,11 @@ final class AppModel: ObservableObject {
       stopCaptureAfterGrace()
     case .replayAudio(let generation): client.outbound.replay(buffers[generation]?.chunks ?? [])
     case .commitAudio(let generation):
+      let attemptID = transportAttemptID
       captureFinalizer.commitAfterStop(generation: generation) { [weak self] in
-        self?.client.outbound.commitAudio()
+        guard let self, transportAttemptID == attemptID, session.connection == .ready else { return }
+        let eventID = client.outbound.commitAudio()
+        commitGenerations[eventID] = generation
       }
     case .clearAudio(let generation):
       if generation == streamingGeneration {
@@ -981,7 +985,11 @@ final class AppModel: ObservableObject {
       }
       settingsMessage = "Connected with \(dictionaryWords.count) dictionary term\(dictionaryWords.count == 1 ? "" : "s")."
       apply(.sessionReady)
-    case .server(.error(let message)):
+    case .server(.error(let message, let eventID)):
+      if let eventID, let generation = commitGenerations.removeValue(forKey: eventID) {
+        apply(.commitRejected(generation: generation, message: message))
+        return
+      }
       if configurationState == .pending {
         pendingConfigurationAcks = 0
         configurationState = .failed(message)
@@ -1008,7 +1016,7 @@ final class AppModel: ObservableObject {
   }
 
   private func startCapture(generation: Int) {
-    captureFinalizer.finish()
+    captureFinalizer.finish(keepingCaptureRunning: true)
     let capturedFocus = insertionService.captureFocusedTarget()
     currentAnchor = insertionService.captureAnchor(for: capturedFocus)
     buffers[generation] = AudioSnippetBuffer()
@@ -1113,6 +1121,7 @@ final class AppModel: ObservableObject {
   private func enqueueConnect() {
     let attemptID = UUID().uuidString
     transportAttemptID = attemptID
+    commitGenerations.removeAll()
     client.outbound.setAttempt(attemptID)
     let previous = transportTask
     transportTask = Task { [weak self] in
@@ -1136,6 +1145,7 @@ final class AppModel: ObservableObject {
 
   private func enqueueDisconnect() {
     transportAttemptID = nil
+    commitGenerations.removeAll()
     client.outbound.setAttempt(nil)
     transportTask?.cancel()
     transportTask = Task { [weak self] in

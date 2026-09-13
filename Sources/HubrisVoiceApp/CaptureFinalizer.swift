@@ -24,14 +24,16 @@ final class CaptureFinalizer {
     commit = action
   }
 
-  func finish() {
+  func finish(keepingCaptureRunning: Bool = false) {
     scheduler.cancel()
     let stop = stop
     let commit = commit
     self.stop = nil
     self.commit = nil
     generation = nil
-    stop?()
+    if !keepingCaptureRunning {
+      stop?()
+    }
     commit?()
   }
 }

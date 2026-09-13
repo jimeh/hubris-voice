@@ -120,7 +120,7 @@ public enum RealtimeServerEvent: Equatable, Sendable {
   case inputCommitted(itemID: String)
   case transcriptDelta(itemID: String, delta: String)
   case transcriptCompleted(itemID: String, transcript: String)
-  case error(message: String)
+  case error(message: String, eventID: String? = nil)
   case ignored(type: String)
 
   public static func decode(_ data: Data) throws -> Self {
@@ -176,7 +176,7 @@ public enum RealtimeServerEvent: Equatable, Sendable {
       else {
         throw DecodeError.missingField("error.message", eventType: type)
       }
-      return .error(message: message)
+      return .error(message: message, eventID: error["event_id"] as? String)
     default:
       return .ignored(type: type)
     }
