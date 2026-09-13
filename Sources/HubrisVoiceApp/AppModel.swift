@@ -825,7 +825,8 @@ final class AppModel: ObservableObject {
     phaseTitle = session.phaseTitle
     shortcutMonitor.capturesEscape = session.presentation != nil
     if let presentation = session.presentation {
-      let overlayPresentation = if presentation.mode == .attention {
+      // The hint only makes sense when there is a transcript to recover.
+      let overlayPresentation = if presentation.mode == .attention, !presentation.transcript.isEmpty {
         OverlayPresentation(
           mode: presentation.mode,
           transcript: presentation.transcript,
