@@ -2,27 +2,44 @@
 import XCTest
 
 final class OverlayPresentationTests: XCTestCase {
-  func testLayoutGrowsWithTranscriptBeforeCappingItsViewport() {
-    let layout = OverlayLayoutPolicy(
-      minimumTranscriptHeight: 44,
-      maximumTranscriptHeight: 132,
-      panelChromeHeight: 134
-    )
+  func testVisibleLinesClampBetweenOneAndTheCap() {
+    let threeLines = PillLayoutPolicy(lineCap: 3)
+    XCTAssertEqual(threeLines.visibleLines(measuredLines: 0), 1)
+    XCTAssertEqual(threeLines.visibleLines(measuredLines: 1), 1)
+    XCTAssertEqual(threeLines.visibleLines(measuredLines: 3), 3)
+    XCTAssertEqual(threeLines.visibleLines(measuredLines: 4), 3)
+
+    let singleLine = PillLayoutPolicy(lineCap: 1)
+    XCTAssertTrue(singleLine.isSingleLine)
+    XCTAssertFalse(threeLines.isSingleLine)
+    XCTAssertEqual(singleLine.visibleLines(measuredLines: 5), 1)
+  }
+
+  func testPanelSizeFollowsTextUpToTheMaximumWidth() {
+    let policy = PillLayoutPolicy()
 
     XCTAssertEqual(
-      layout.transcriptViewportHeight(measuredTextHeight: 20),
-      44
+      policy.panelSize(measuredTextWidth: 0, measuredLines: 0),
+      LayoutSize(width: 52, height: 42)
     )
     XCTAssertEqual(
-      layout.transcriptViewportHeight(measuredTextHeight: 96),
-      96
+      policy.panelSize(measuredTextWidth: 100, measuredLines: 1),
+      LayoutSize(width: 164, height: 42)
     )
     XCTAssertEqual(
-      layout.transcriptViewportHeight(measuredTextHeight: 240),
-      132
+      policy.panelSize(measuredTextWidth: 900, measuredLines: 8),
+      LayoutSize(width: 440, height: 86)
     )
-    XCTAssertEqual(layout.panelHeight(measuredTextHeight: 20), 178)
-    XCTAssertEqual(layout.panelHeight(measuredTextHeight: 240), 266)
+    XCTAssertEqual(policy.maximumTextWidth, 376)
+  }
+
+  func testMessageHeightIsAddedBelowTheTranscript() {
+    let policy = PillLayoutPolicy()
+
+    XCTAssertEqual(
+      policy.panelSize(measuredTextWidth: 100, measuredLines: 1, messageHeight: 18).height,
+      60
+    )
   }
 
   func testDelayedActionRunsAfterDelay() async {

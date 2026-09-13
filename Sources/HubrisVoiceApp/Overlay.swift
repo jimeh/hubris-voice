@@ -7,50 +7,32 @@ enum OverlayMode: Equatable {
   case listening
   case finalizing
   case attention
-
-  var title: String {
-    switch self {
-    case .listening:
-      "Listening"
-    case .finalizing:
-      "Finalizing"
-    case .attention:
-      "Transcript ready"
-    }
-  }
-
-  var color: Color {
-    switch self {
-    case .listening:
-      .signalBlue
-    case .finalizing, .attention:
-      .voiceCoral
-    }
-  }
 }
 
 @MainActor
 final class OverlayViewModel: ObservableObject {
+  static let barCount = 5
+
   @Published var mode: OverlayMode = .listening
   @Published var transcript = ""
-  @Published var message = "Hold ⌃⇧Space · release to paste"
-  @Published var elapsed: TimeInterval = 0
-  @Published var levels: [Float] = Array(repeating: 0.08, count: 22)
+  @Published var message = ""
+  @Published var levels: [Float] = Array(repeating: 0, count: OverlayViewModel.barCount)
   @Published var pendingCount = 0
   @Published var isLocked = false
-
-  var transcriptViewportHeight: CGFloat {
-    OverlayLayout.transcriptViewportHeight(for: transcript)
-  }
+  @Published var lineCap = 3
+  /// Set by the controller from its measurement so the view and the panel
+  /// agree on the text column width and on whether the transcript overflows.
+  @Published var overflows = false
+  @Published var textWidth: CGFloat = 0
 
   func beginListening() {
     mode = .listening
     transcript = ""
-    message = "Hold ⌃⇧Space · release to paste"
-    elapsed = 0
-    levels = Array(repeating: 0.08, count: 22)
+    message = ""
+    levels = Array(repeating: 0, count: Self.barCount)
     pendingCount = 0
     isLocked = false
+    overflows = false
   }
 
   func apply(_ presentation: OverlayPresentation) {
@@ -67,7 +49,7 @@ final class OverlayViewModel: ObservableObject {
 
   func record(level: Float) {
     levels.removeFirst()
-    levels.append(max(0.08, level))
+    levels.append(max(0, min(1, level)))
   }
 }
 
@@ -75,11 +57,20 @@ final class OverlayViewModel: ObservableObject {
 final class OverlayController {
   private let model: OverlayViewModel
   private let panel: NSPanel
-  private let hostingView: NSHostingView<OverlayView>
+  private let hostingView: NSHostingView<PillView>
   private let placement = OverlayPlacement()
   private var cancellables: Set<AnyCancellable> = []
   private var anchor: OverlayAnchor?
   private var preference = OverlayPlacementPreference.automatic
+
+  var lineCap: Int {
+    get { model.lineCap }
+    set {
+      let clamped = max(1, min(newValue, 6))
+      guard clamped != model.lineCap else { return }
+      model.lineCap = clamped
+    }
+  }
 
   var panelFrame: NSRect {
     panel.frame
@@ -91,17 +82,10 @@ final class OverlayController {
 
   init(model: OverlayViewModel) {
     self.model = model
-    hostingView = NSHostingView(
-      rootView: OverlayView(model: model)
-    )
+    hostingView = NSHostingView(rootView: PillView(model: model))
     hostingView.sizingOptions = []
     panel = NSPanel(
-      contentRect: NSRect(
-        x: 0,
-        y: 0,
-        width: OverlayLayout.panelWidth,
-        height: OverlayLayout.panelHeight(for: "")
-      ),
+      contentRect: NSRect(origin: .zero, size: NSSize(width: 52, height: 42)),
       styleMask: [.borderless, .nonactivatingPanel],
       backing: .buffered,
       defer: true
@@ -118,14 +102,49 @@ final class OverlayController {
     panel.hidesOnDeactivate = false
     panel.isFloatingPanel = true
     panel.becomesKeyOnlyIfNeeded = true
+    panel.ignoresMouseEvents = true
+    panel.appearance = NSAppearance(named: .darkAqua)
     panel.contentView = hostingView
 
-    model.$transcript
-      .removeDuplicates()
-      .sink { [weak self] transcript in
-        self?.resizeForTranscript(transcript)
-      }
-      .store(in: &cancellables)
+    // Published values arrive before the property changes, so the layout
+    // works from the emitted snapshot rather than reading the model back.
+    Publishers.CombineLatest(
+      Publishers.CombineLatest3(model.$transcript, model.$message, model.$mode),
+      Publishers.CombineLatest3(model.$lineCap, model.$pendingCount, model.$isLocked)
+    )
+    .map { text, chrome in
+      LayoutInput(
+        transcript: text.0,
+        message: text.1,
+        mode: text.2,
+        lineCap: chrome.0,
+        pendingCount: chrome.1,
+        isLocked: chrome.2
+      )
+    }
+    .removeDuplicates()
+    .sink { [weak self] input in self?.layout(input) }
+    .store(in: &cancellables)
+  }
+
+  private struct LayoutInput: Equatable {
+    let transcript: String
+    let message: String
+    let mode: OverlayMode
+    let lineCap: Int
+    let pendingCount: Int
+    let isLocked: Bool
+  }
+
+  private var currentInput: LayoutInput {
+    LayoutInput(
+      transcript: model.transcript,
+      message: model.message,
+      mode: model.mode,
+      lineCap: model.lineCap,
+      pendingCount: model.pendingCount,
+      isLocked: model.isLocked
+    )
   }
 
   func show(
@@ -134,7 +153,7 @@ final class OverlayController {
   ) {
     self.anchor = anchor
     self.preference = preference
-    resizeForTranscript(model.transcript)
+    layout(currentInput)
     guard !panel.isVisible else {
       return
     }
@@ -145,29 +164,34 @@ final class OverlayController {
     panel.orderOut(nil)
   }
 
-  private func resizeForTranscript(_ transcript: String) {
-    let height = OverlayLayout.panelHeight(for: transcript)
-    let size = NSSize(width: OverlayLayout.panelWidth, height: height)
-    guard let screen = targetScreen() else {
-      panel.setFrame(
-        NSRect(origin: panel.frame.origin, size: size),
-        display: true
-      )
+  private func layout(_ input: LayoutInput) {
+    let screen = targetScreen()
+    let policy = PillLayout.policy(lineCap: input.lineCap, screen: screen)
+    let measurement = PillLayout.measure(
+      transcript: input.transcript,
+      message: input.message,
+      badges: PillLayout.badgeWidth(pendingCount: input.pendingCount, isLocked: input.isLocked),
+      policy: policy
+    )
+    model.overflows = measurement.overflows
+    model.textWidth = measurement.textWidth
+    let size = policy.panelSize(
+      measuredTextWidth: measurement.columnWidth,
+      measuredLines: measurement.lines,
+      messageHeight: measurement.messageHeight
+    )
+    let panelSize = NSSize(width: size.width, height: size.height)
+    guard let screen else {
+      panel.setFrame(NSRect(origin: panel.frame.origin, size: panelSize), display: true)
       return
     }
     let origin = placement.origin(
       anchor: anchor,
       preference: preference,
-      panelSize: LayoutSize(size),
+      panelSize: LayoutSize(panelSize),
       visibleFrame: LayoutRect(screen.visibleFrame)
     )
-    panel.setFrame(
-      NSRect(
-        origin: NSPoint(origin),
-        size: size
-      ),
-      display: true
-    )
+    panel.setFrame(NSRect(origin: NSPoint(origin), size: panelSize), display: true)
   }
 
   private func targetScreen() -> NSScreen? {
@@ -179,6 +203,107 @@ final class OverlayController {
     return NSScreen.screens.first { $0.frame.contains(mouseLocation) }
       ?? NSScreen.main
       ?? NSScreen.screens.first
+  }
+}
+
+/// Font metrics and text measurement for the pill. The policy in the core
+/// owns the arithmetic; this owns everything that needs AppKit.
+@MainActor
+enum PillLayout {
+  struct Measurement {
+    let textWidth: CGFloat
+    let columnWidth: CGFloat
+    let lines: Int
+    let overflows: Bool
+    let messageHeight: CGFloat
+  }
+
+  static let transcriptFont: NSFont = {
+    let base = NSFont.systemFont(ofSize: 15.5, weight: .medium)
+    guard
+      let descriptor = base.fontDescriptor.withDesign(.rounded),
+      let rounded = NSFont(descriptor: descriptor, size: 15.5)
+    else {
+      return base
+    }
+    return rounded
+  }()
+
+  static let messageFont = NSFont.systemFont(ofSize: 11, weight: .medium)
+  static let messageHeight: CGFloat = 18
+  /// Drawn after the transcript by the view, so it is measured with it.
+  static let caretSuffix = " ▏"
+  static let maximumWidth: CGFloat = 440
+  static let lineHeight: CGFloat = ceil(
+    transcriptFont.ascender - transcriptFont.descender + transcriptFont.leading
+  )
+
+  static func policy(lineCap: Int, screen: NSScreen?) -> PillLayoutPolicy {
+    var policy = PillLayoutPolicy(lineHeight: Double(lineHeight), lineCap: lineCap)
+    if let screen {
+      policy.maximumWidth = min(Double(maximumWidth), screen.visibleFrame.width * 0.45)
+    }
+    return policy
+  }
+
+  static func badgeWidth(pendingCount: Int, isLocked: Bool) -> CGFloat {
+    (pendingCount > 0 ? 26 : 0) + (isLocked ? 16 : 0)
+  }
+
+  /// `badges` is the width the lock glyph and pending count take next to the
+  /// bars; it is charged to the text column so the policy's chrome stays
+  /// constant.
+  static func measure(
+    transcript: String,
+    message: String,
+    badges: CGFloat,
+    policy: PillLayoutPolicy
+  ) -> Measurement {
+    let maximumTextWidth = CGFloat(policy.maximumTextWidth) - badges
+    let messageWidth = message.isEmpty ? 0 : min(ceil(width(of: message, font: messageFont)), maximumTextWidth)
+    let messageHeight = message.isEmpty ? 0 : messageHeight
+
+    guard !transcript.isEmpty else {
+      return Measurement(
+        textWidth: 0,
+        columnWidth: messageWidth + badges,
+        lines: 1,
+        overflows: false,
+        messageHeight: messageHeight
+      )
+    }
+
+    let measured = transcript + caretSuffix
+    if policy.isSingleLine {
+      let natural = ceil(width(of: measured, font: transcriptFont))
+      let textWidth = min(natural, maximumTextWidth)
+      return Measurement(
+        textWidth: textWidth,
+        columnWidth: max(textWidth, messageWidth) + badges,
+        lines: 1,
+        overflows: natural > maximumTextWidth,
+        messageHeight: messageHeight
+      )
+    }
+
+    let bounds = (measured as NSString).boundingRect(
+      with: NSSize(width: maximumTextWidth, height: .greatestFiniteMagnitude),
+      options: [.usesLineFragmentOrigin, .usesFontLeading],
+      attributes: [.font: transcriptFont]
+    )
+    let lines = max(1, Int((bounds.height / lineHeight).rounded()))
+    let textWidth = lines > 1 ? maximumTextWidth : ceil(bounds.width)
+    return Measurement(
+      textWidth: textWidth,
+      columnWidth: max(textWidth, messageWidth) + badges,
+      lines: lines,
+      overflows: lines > policy.visibleLines(measuredLines: lines),
+      messageHeight: messageHeight
+    )
+  }
+
+  private static func width(of text: String, font: NSFont) -> CGFloat {
+    (text as NSString).size(withAttributes: [.font: font]).width
   }
 }
 
@@ -207,218 +332,4 @@ private extension NSPoint {
   init(_ point: LayoutPoint) {
     self.init(x: point.x, y: point.y)
   }
-}
-
-private struct OverlayView: View {
-  @ObservedObject var model: OverlayViewModel
-
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      HStack(spacing: 8) {
-        Circle()
-          .fill(model.mode.color)
-          .frame(width: 8, height: 8)
-        Text(model.mode.title)
-          .font(.system(size: 13, weight: .semibold, design: .rounded))
-        if model.isLocked {
-          Image(systemName: "lock.fill")
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(model.mode.color)
-            .accessibilityLabel("Recording locked")
-        }
-        Spacer()
-        Text(timeLabel)
-          .font(.system(size: 11, weight: .medium, design: .monospaced))
-          .foregroundStyle(Color.fog.opacity(0.58))
-        if model.pendingCount > 0 {
-          Text("+\(model.pendingCount)")
-            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-            .foregroundStyle(Color.fog.opacity(0.58))
-        }
-      }
-
-      ScrollViewReader { proxy in
-        ScrollView(.vertical) {
-          VStack(alignment: .leading, spacing: 0) {
-            Text(
-              model.transcript.isEmpty
-                ? "Start speaking…"
-                : model.transcript
-            )
-            .font(
-              .system(size: 18, weight: .medium, design: .rounded)
-            )
-            .foregroundStyle(
-              model.transcript.isEmpty ? Color.fog.opacity(0.42) : .fog
-            )
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-
-            Color.clear
-              .frame(height: 1)
-              .id(TranscriptScrollAnchor.bottom)
-          }
-        }
-        .scrollIndicators(.hidden)
-        .frame(height: model.transcriptViewportHeight)
-        .defaultScrollAnchor(.bottom)
-        .onChange(of: model.transcript) {
-          proxy.scrollTo(TranscriptScrollAnchor.bottom, anchor: .bottom)
-        }
-      }
-
-      AudioInkView(
-        levels: model.levels,
-        color: model.mode.color,
-        reduceMotion: reduceMotion
-      )
-      .frame(height: 22)
-
-      HStack {
-        Text(model.message)
-          .font(.system(size: 11, weight: .regular))
-          .foregroundStyle(Color.fog.opacity(0.58))
-        Spacer()
-      }
-    }
-    .padding(.horizontal, 20)
-    .padding(.vertical, 16)
-    .frame(
-      maxWidth: .infinity,
-      maxHeight: .infinity,
-      alignment: .topLeading
-    )
-    .background {
-      RoundedRectangle(cornerRadius: 18, style: .continuous)
-        .fill(Color.carbon.opacity(0.96))
-        .overlay {
-          RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .stroke(Color.white.opacity(0.1), lineWidth: 1)
-        }
-    }
-    .padding(8)
-  }
-
-  private var timeLabel: String {
-    let seconds = Int(model.elapsed)
-    return String(format: "%02d:%02d", seconds / 60, seconds % 60)
-  }
-}
-
-private struct AudioInkView: View {
-  let levels: [Float]
-  let color: Color
-  let reduceMotion: Bool
-
-  var body: some View {
-    HStack(alignment: .center, spacing: 3) {
-      ForEach(Array(levels.enumerated()), id: \.offset) { _, level in
-        Capsule(style: .continuous)
-          .fill(color.opacity(0.9))
-          .frame(
-            maxWidth: .infinity,
-            minHeight: 2,
-            maxHeight: max(2, CGFloat(level) * 22)
-          )
-      }
-    }
-    .animation(
-      reduceMotion ? nil : .easeOut(duration: 0.08),
-      value: levels
-    )
-  }
-}
-
-private enum TranscriptScrollAnchor {
-  static let bottom = "transcript-bottom"
-}
-
-@MainActor
-private enum OverlayLayout {
-  static let panelWidth: CGFloat = 540
-  static let minimumTranscriptHeight: CGFloat = 44
-  static let maximumTranscriptHeight: CGFloat = 132
-  static let panelChromeHeight: CGFloat = 134
-  static let transcriptWidth: CGFloat = panelWidth - 56
-
-  static let policy = OverlayLayoutPolicy(
-    minimumTranscriptHeight: Double(minimumTranscriptHeight),
-    maximumTranscriptHeight: Double(maximumTranscriptHeight),
-    panelChromeHeight: Double(panelChromeHeight)
-  )
-
-  private static let transcriptFont: NSFont = {
-    let base = NSFont.systemFont(ofSize: 18, weight: .medium)
-    guard
-      let descriptor = base.fontDescriptor.withDesign(.rounded),
-      let rounded = NSFont(descriptor: descriptor, size: 18)
-    else {
-      return base
-    }
-    return rounded
-  }()
-
-  static func transcriptViewportHeight(for transcript: String) -> CGFloat {
-    CGFloat(
-      policy.transcriptViewportHeight(
-        measuredTextHeight: Double(measuredTextHeight(for: transcript))
-      )
-    )
-  }
-
-  static func panelHeight(for transcript: String) -> CGFloat {
-    CGFloat(
-      policy.panelHeight(
-        measuredTextHeight: Double(measuredTextHeight(for: transcript))
-      )
-    )
-  }
-
-  private static func measuredTextHeight(for transcript: String) -> CGFloat {
-    let text = transcript.isEmpty ? "Start speaking…" : transcript
-    let bounds = (text as NSString).boundingRect(
-      with: NSSize(
-        width: transcriptWidth,
-        height: .greatestFiniteMagnitude
-      ),
-      options: [.usesLineFragmentOrigin, .usesFontLeading],
-      attributes: [.font: transcriptFont]
-    )
-    return ceil(bounds.height)
-  }
-}
-
-extension Color {
-  static let carbon = Color(
-    red: 0x12 / 255,
-    green: 0x14 / 255,
-    blue: 0x17 / 255
-  )
-  static let slate = Color(
-    red: 0x24 / 255,
-    green: 0x28 / 255,
-    blue: 0x2e / 255
-  )
-  static let fog = Color(
-    red: 0xe8 / 255,
-    green: 0xec / 255,
-    blue: 0xef / 255
-  )
-  static let signalBlue = Color(
-    red: 0x62 / 255,
-    green: 0xa8 / 255,
-    blue: 0xff / 255
-  )
-  static let voiceCoral = Color(
-    red: 0xff / 255,
-    green: 0x74 / 255,
-    blue: 0x66 / 255
-  )
-  static let completionMint = Color(
-    red: 0x6d / 255,
-    green: 0xd6 / 255,
-    blue: 0xa0 / 255
-  )
 }

@@ -30,13 +30,28 @@ final class OverlayPlacementTests: XCTestCase {
     )
   }
 
-  func testCaretWithRoomAboveUsesGapAndCentersOnCaret() {
+  func testCaretWithRoomAboveUsesGapAndAlignsToCaretLeftEdge() {
     let caret = anchor(.caret, x: 690, y: 300, width: 2, height: 20)
 
     XCTAssertEqual(
       origin(anchor: caret),
-      LayoutPoint(x: 491, y: 332)
+      LayoutPoint(x: 690, y: 332)
     )
+  }
+
+  func testLeadingAlignmentDoesNotMoveWhenThePanelWidens() {
+    let caret = anchor(.caret, x: 690, y: 300, width: 2, height: 20)
+
+    XCTAssertEqual(
+      origin(anchor: caret, panelWidth: 120).x,
+      origin(anchor: caret, panelWidth: 400).x
+    )
+  }
+
+  func testLeadingAlignedPanelClampsToRightEdge() {
+    let caret = anchor(.caret, x: 1_250, y: 300, width: 2, height: 20)
+
+    XCTAssertEqual(origin(anchor: caret).x, 892)
   }
 
   func testCaretNearTopFlipsBelow() {
@@ -44,7 +59,7 @@ final class OverlayPlacementTests: XCTestCase {
 
     XCTAssertEqual(
       origin(anchor: caret),
-      LayoutPoint(x: 491, y: 568)
+      LayoutPoint(x: 690, y: 568)
     )
   }
 
@@ -68,11 +83,11 @@ final class OverlayPlacementTests: XCTestCase {
         panelSize: LayoutSize(width: 200, height: 180),
         visibleFrame: shortFrame
       ),
-      LayoutPoint(x: 150, y: 62)
+      LayoutPoint(x: 200, y: 62)
     )
   }
 
-  func testWindowAnchorPlacesInsideWindowNearTop() {
+  func testWindowAnchorStaysCenteredInsideWindowNearTop() {
     let window = anchor(.window, x: 250, y: 150, width: 900, height: 600)
 
     XCTAssertEqual(
@@ -86,7 +101,7 @@ final class OverlayPlacementTests: XCTestCase {
 
     XCTAssertEqual(
       origin(anchor: caret),
-      LayoutPoint(x: 500, y: 332)
+      LayoutPoint(x: 700, y: 332)
     )
   }
 
@@ -134,13 +149,14 @@ final class OverlayPlacementTests: XCTestCase {
   private func origin(
     anchor: OverlayAnchor? = nil,
     preference: OverlayPlacementPreference = .automatic,
+    panelWidth: Double? = nil,
     panelHeight: Double? = nil
   ) -> LayoutPoint {
     placement.origin(
       anchor: anchor,
       preference: preference,
       panelSize: LayoutSize(
-        width: panelSize.width,
+        width: panelWidth ?? panelSize.width,
         height: panelHeight ?? panelSize.height
       ),
       visibleFrame: visibleFrame

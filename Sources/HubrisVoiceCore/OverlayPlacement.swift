@@ -144,23 +144,26 @@ public struct OverlayPlacement: Equatable, Sendable {
     panelSize: LayoutSize,
     visibleFrame: LayoutRect
   ) -> LayoutPoint {
-    let centeredX = anchor.rect.midX - panelSize.width / 2
     if anchor.kind == .window {
       return LayoutPoint(
-        x: centeredX,
+        x: anchor.rect.midX - panelSize.width / 2,
         y: anchor.rect.maxY - edgeMargin - panelSize.height
       )
     }
 
+    // The panel's width follows the transcript, so it is aligned to the
+    // anchor's left edge rather than centered; centering would shift it with
+    // every word.
+    let leadingX = anchor.rect.minX
     let aboveY = anchor.rect.maxY + gap
     if aboveY + panelSize.height <= visibleFrame.maxY - edgeMargin {
-      return LayoutPoint(x: centeredX, y: aboveY)
+      return LayoutPoint(x: leadingX, y: aboveY)
     }
     let belowY = anchor.rect.minY - gap - panelSize.height
     if belowY >= visibleFrame.minY + edgeMargin {
-      return LayoutPoint(x: centeredX, y: belowY)
+      return LayoutPoint(x: leadingX, y: belowY)
     }
-    return LayoutPoint(x: centeredX, y: aboveY)
+    return LayoutPoint(x: leadingX, y: aboveY)
   }
 
   private func clamped(

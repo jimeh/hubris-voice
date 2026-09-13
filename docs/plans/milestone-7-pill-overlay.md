@@ -1,7 +1,8 @@
 # Milestone 7: pill overlay and insertion without clicks
 
 Design brief for milestone 7 of [the daily driver plan](2026-09-13-daily-driver.md).
-Builds on milestones 1 through 6. Part A is core and app policy with no UI
+Implemented on 2026-09-13; the manual verification list at the end is still
+open. Builds on milestones 1 through 6. Part A is core and app policy with no UI
 and can be delegated. Part B is the overlay itself and is implemented by the
 orchestrator.
 

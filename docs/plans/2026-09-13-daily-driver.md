@@ -1,8 +1,8 @@
 # Daily driver plan
 
-Status: milestones 1 to 6 implemented on 2026-09-13; milestone 7 was designed
-on 2026-09-13 after reviewing the overlay in use and is not yet implemented.
-Each milestone has its own brief in this directory. Manual verification with
+Status: all seven milestones implemented on 2026-09-13; milestone 7 was added
+after reviewing the overlay in use. Each milestone has its own brief in this
+directory. Manual verification with
 the user present is still open for the items listed under each milestone. Originally drafted 2026-09-13 and revised
 after an independent review. Builds on
 [PLAN.md](../../PLAN.md), which stays the product and architecture reference.

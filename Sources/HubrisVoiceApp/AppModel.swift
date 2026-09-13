@@ -50,6 +50,7 @@ final class AppModel: ObservableObject {
     didSet {
       guard overlayLineCap != oldValue else { return }
       updateSettings { $0.overlayLineCap = overlayLineCap }
+      overlayController?.lineCap = overlayLineCap
     }
   }
 
@@ -170,7 +171,9 @@ final class AppModel: ObservableObject {
   @Published private(set) var lastAttentionAt: Date?
 
   let overlayModel = OverlayViewModel()
-  weak var overlayController: OverlayController?
+  weak var overlayController: OverlayController? {
+    didSet { overlayController?.lineCap = overlayLineCap }
+  }
 
   var lastTranscript: String? {
     history.latest?.text
