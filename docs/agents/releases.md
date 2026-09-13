@@ -2,8 +2,9 @@
 
 Hubris Voice uses Release Please to maintain one release pull request on
 `main`. Merging that pull request creates a `v<version>` tag and a draft GitHub
-Release. The same workflow passes Release Please's exact SHA, tag, and version
-to the reusable release workflow. There is no independent tag trigger.
+Release. The outer workflow then dispatches the protected release workflow at
+the exact tag. This separate dispatch is required so the release job receives
+its GitHub Environment secrets. There is no independent tag trigger.
 
 The release workflow builds an arm64 and x86_64 executable, combines them into
 a universal app, embeds the pinned Sparkle framework, signs every retained code
@@ -85,20 +86,24 @@ closed when the committed production public key is absent or malformed.
 1. Release Please updates the release PR from Conventional Commits and keeps
    `CHANGELOG.md`, both `Info.plist` versions, and the release manifest aligned.
 2. Merging the release PR creates the exact tag and draft GitHub Release.
-3. The protected macOS job validates the workflow SHA and draft identity before
-   exposing release credentials.
-4. `mise run release:macos` prepares the verified Sparkle distribution, builds
+3. The outer workflow dispatches `release.yml` at the exact release tag. Calling
+   it as a reusable workflow does not reliably expose the `release` environment's
+   secrets. The self-contained `Release` run reports its outcome independently.
+4. The protected macOS job validates the workflow SHA and draft identity before
+   exposing release credentials. The Swift release tool validates every signing
+   credential before downloading Sparkle or building either architecture.
+5. `mise run release:macos` prepares the verified Sparkle distribution, builds
    both architectures, signs and notarizes the app, then produces the final ZIP,
    DMG, SBOM, and preliminary checksums.
-5. `mise run release:appcast` supplies the production Sparkle key only to the
+6. `mise run release:appcast` supplies the production Sparkle key only to the
    appcast tools. It first proves the private key matches the public key embedded
    in the app, then signs and verifies the ZIP enclosure and feed and rewrites
    the final checksum inventory.
-6. The workflow uploads exactly the five expected assets to the draft and
+7. The workflow uploads exactly the five expected assets to the draft and
    compares GitHub's SHA-256 asset digests with the local files.
-7. GitHub Actions issues and locally verifies build-provenance and SPDX SBOM
+8. GitHub Actions issues and locally verifies build-provenance and SPDX SBOM
    attestations for the ZIP and DMG.
-8. The workflow publishes the verified draft and requires GitHub to report the
+9. The workflow publishes the verified draft and requires GitHub to report the
    resulting release as immutable.
 
 The public asset set is:
@@ -118,6 +123,11 @@ Any failure before publication leaves the GitHub Release as a mutable draft.
 Reruns may replace only the expected draft assets and reject any unexpected
 asset. The final ZIP is created after stapling the app. The DMG is signed,
 submitted as a separate notarization request, and stapled before publication.
+
+The `release:*` Mise tasks execute the SwiftPM package in `Tools/ReleaseTool`.
+It owns release configuration parsing, subprocess execution, packaging, signing,
+notarization, appcast validation, and GitHub Release inventory checks. Small
+bootstrap and Sparkle acquisition scripts remain in `Scripts`.
 
 ## Manual verification
 

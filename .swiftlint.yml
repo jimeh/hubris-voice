@@ -2,9 +2,13 @@ included:
   - Package.swift
   - Sources
   - Tests
+  - Tools/ReleaseTool/Package.swift
+  - Tools/ReleaseTool/Sources
+  - Tools/ReleaseTool/Tests
 
 excluded:
   - .build
+  - Tools/ReleaseTool/.build
 
 strict: true
 check_for_updates: false

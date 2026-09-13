@@ -6,8 +6,6 @@ repo_dir="${0:A:h:h}"
 info_plist="${repo_dir}/Support/Info.plist"
 entitlements="${repo_dir}/Support/HubrisVoice.entitlements"
 release_config="${repo_dir}/.github/release-please-config.json"
-release_github_script="${repo_dir}/Scripts/release-github.sh"
-release_macos_script="${repo_dir}/Scripts/release-macos.sh"
 test_count=0
 
 assert_equal() {
@@ -57,18 +55,6 @@ assert_equal \
   true \
   "$(plutil -extract draft raw -o - "${release_config}")"
 assert_equal \
-  "draft release is resolved to its database identifier" \
-  1 \
-  "$(rg -c -- '--json databaseId' "${release_github_script}")"
-assert_absent \
-  "draft operations avoid the published-release tag endpoint" \
-  '/releases/tags/' \
-  "${release_github_script}"
-assert_absent \
-  "notarization avoids the read-only zsh status parameter" \
-  '^[[:space:]]*local status([[:space:]]|$)' \
-  "${release_macos_script}"
-assert_equal \
   "release entitlement count" \
   1 \
   "$(plutil -p "${entitlements}" | rg -c '=>')"
@@ -77,26 +63,7 @@ assert_equal \
   true \
   "$(plutil -extract 'com\.apple\.security\.device\.audio-input' raw -o - "${entitlements}")"
 
-private_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-assert_equal \
-  "Sparkle public key derivation" \
-  "O2onvM62pC1io6jQKm8Nc2UyFXcd4kOmOsBIoYtZ2ik=" \
-  "$(print -rn -- "${private_key}" | swift "${repo_dir}/Scripts/sparkle-public-key.swift")"
-
 "${repo_dir}/Scripts/prepare-sparkle.sh" --manifest-only >/dev/null
-((test_count += 1))
-
-current_sha="$(git rev-parse HEAD)"
-RELEASE_SHA="${current_sha}" \
-  RELEASE_VERSION="${short_version}" \
-  "${repo_dir}/Scripts/release-macos.sh" validate-source >/dev/null
-((test_count += 1))
-
-if RELEASE_SHA="${current_sha}" RELEASE_VERSION=invalid \
-  "${repo_dir}/Scripts/release-macos.sh" validate-source >/dev/null 2>&1; then
-  print -u2 -- "release source validation accepted a malformed version"
-  exit 1
-fi
 ((test_count += 1))
 
 print -- "Release configuration: ${test_count} tests passed"
