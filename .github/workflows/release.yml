@@ -1,0 +1,236 @@
+name: Release
+
+on:
+  workflow_call:
+    inputs:
+      publish:
+        description: Publish the exact draft release after verification
+        required: true
+        type: boolean
+      sha:
+        description: Expected workflow event SHA
+        required: true
+        type: string
+      tag:
+        description: Exact release tag
+        required: true
+        type: string
+      version:
+        description: Release version without the v prefix
+        required: true
+        type: string
+    secrets:
+      RELEASE_BOT_PRIVATE_KEY:
+        description: Private key for the release bot GitHub App
+        required: true
+      APPLE_NOTARIZATION_KEY_P8_BASE64:
+        description: Environment-provided App Store Connect API private key
+        required: false
+      MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64:
+        description: Environment-provided Developer ID Application identity
+        required: false
+      MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD:
+        description: Environment-provided PKCS#12 password
+        required: false
+      SPARKLE_EDDSA_PRIVATE_KEY:
+        description: Environment-provided Sparkle appcast signing key
+        required: false
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish an existing matching draft release
+        required: true
+        default: false
+        type: boolean
+      sha:
+        description: Exact SHA of the selected workflow ref
+        required: true
+        type: string
+      tag:
+        description: Exact v-prefixed tag; test builds default to v<version>
+        required: false
+        type: string
+      version:
+        description: Release version without the v prefix
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ inputs.publish && inputs.tag || github.sha }}
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  MISE_AUTO_INSTALL: 'false'
+  RELEASE_DIST_DIR: ${{ github.workspace }}/dist
+  RELEASE_SHA: ${{ github.sha }}
+  RELEASE_TAG: ${{ inputs.tag || format('v{0}', inputs.version) }}
+  RELEASE_VERSION: ${{ inputs.version }}
+
+jobs:
+  release:
+    name: Build and optionally publish release
+    runs-on: macos-15
+    timeout-minutes: 90
+    environment: release
+    permissions:
+      actions: read
+      artifact-metadata: write
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Validate source selection
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPECTED_SHA: ${{ inputs.sha }}
+          RELEASE_PUBLISH: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || [[ "$GITHUB_SHA" != "$EXPECTED_SHA" ]]; then
+            echo "workflow source SHA does not match the requested release SHA" >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_PUBLISH" == true ]]; then
+            if [[ "$GITHUB_REF" == refs/heads/main && "$GITHUB_EVENT_NAME" != workflow_dispatch ]]; then
+              exit 0
+            fi
+            if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF" == "refs/tags/$RELEASE_TAG" ]]; then
+              exit 0
+            fi
+            echo "publishing requires a normal main push or exact-tag recovery dispatch" >&2
+            exit 1
+          fi
+
+      - name: Check out exact release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Install locked release tools
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          cache: false
+
+      - name: Prepare verified Sparkle distribution
+        run: mise run sparkle:prepare
+
+      - name: Validate checked-out source and version
+        run: mise run release:validate
+
+      - id: app-token
+        name: Create release bot token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          permission-contents: ${{ inputs.publish && 'write' || 'read' }}
+
+      - name: Validate release bot repository access
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh api "repos/${GITHUB_REPOSITORY}" >/dev/null
+
+      - name: Validate exact draft release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: mise run release:validate-draft
+
+      - name: Build, sign, notarize, and inventory release
+        env:
+          MACOS_NOTARY_ISSUER_ID: ${{ vars.APPLE_NOTARIZATION_ISSUER_ID }}
+          MACOS_NOTARY_KEY: ${{ secrets.APPLE_NOTARIZATION_KEY_P8_BASE64 }}
+          MACOS_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARIZATION_KEY_ID }}
+          MACOS_SIGN_P12: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_P12_BASE64 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
+          MACOS_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: mise run release:macos
+
+      - name: Generate signed updater feed
+        env:
+          SPARKLE_EDDSA_PRIVATE_KEY: ${{ secrets.SPARKLE_EDDSA_PRIVATE_KEY }}
+        run: mise run release:appcast
+
+      - name: Upload manual verification candidate
+        if: ${{ !inputs.publish }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Hubris-Voice-${{ inputs.version }}-verified-${{ github.run_attempt }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          overwrite: false
+
+      - name: Upload and verify draft assets
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: mise run release:upload
+
+      - name: Attest ZIP build provenance
+        if: inputs.publish
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/Hubris-Voice-${{ inputs.version }}-macOS-universal.zip
+
+      - name: Attest DMG build provenance
+        if: inputs.publish
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/Hubris-Voice-${{ inputs.version }}-macOS-universal.dmg
+
+      - name: Attest ZIP SPDX SBOM
+        if: inputs.publish
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/Hubris-Voice-${{ inputs.version }}-macOS-universal.zip
+          sbom-path: dist/Hubris-Voice-${{ inputs.version }}-macOS-universal.spdx.json
+
+      - name: Attest DMG SPDX SBOM
+        if: inputs.publish
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/Hubris-Voice-${{ inputs.version }}-macOS-universal.dmg
+          sbom-path: dist/Hubris-Voice-${{ inputs.version }}-macOS-universal.spdx.json
+
+      - name: Verify local attestations
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          signer="${GITHUB_REPOSITORY}/.github/workflows/release.yml"
+          for artifact in zip dmg; do
+            archive="dist/Hubris-Voice-${RELEASE_VERSION}-macOS-universal.${artifact}"
+            gh attestation verify "$archive" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$signer" --source-ref "$GITHUB_REF" --source-digest "$RELEASE_SHA"
+            gh attestation verify "$archive" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$signer" --source-ref "$GITHUB_REF" --source-digest "$RELEASE_SHA" \
+              --predicate-type https://spdx.dev/Document/v2.3
+          done
+
+      - name: Publish immutable release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: mise run release:publish
+
+      - name: Verify published release is immutable
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for _attempt in {1..10}; do
+            if [[ "$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .immutable)" == true ]]; then
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "published release is not immutable" >&2
+          exit 1
