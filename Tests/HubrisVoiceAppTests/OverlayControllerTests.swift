@@ -1,8 +1,31 @@
 @testable import HubrisVoiceApp
+import HubrisVoiceCore
 import XCTest
 
 @MainActor
 final class OverlayControllerTests: XCTestCase {
+  func testPreviewRemovesOnlyLeadingWhitespaceAcrossStreamUpdates() {
+    let model = OverlayViewModel()
+    model.apply(OverlayPresentation(mode: .listening, transcript: " \n\tHello ", message: "", pendingCount: 0))
+    XCTAssertEqual(model.transcript, "Hello ")
+
+    model.apply(OverlayPresentation(
+      mode: .listening,
+      transcript: " \n\tHello world\n  Next line",
+      message: "",
+      pendingCount: 0
+    ))
+    XCTAssertEqual(model.transcript, "Hello world\n  Next line")
+
+    model.apply(OverlayPresentation(
+      mode: .finalizing,
+      transcript: "Hello world\n  Next line",
+      message: "",
+      pendingCount: 0
+    ))
+    XCTAssertEqual(model.transcript, "Hello world\n  Next line")
+  }
+
   func testTranscriptGrowthStopsAtTheLineCapAndKeepsTheBottomEdge() {
     let model = OverlayViewModel()
     let controller = OverlayController(model: model)

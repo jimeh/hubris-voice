@@ -41,7 +41,8 @@ final class OverlayViewModel: ObservableObject {
     case .finalizing: .finalizing
     case .attention: .attention
     }
-    transcript = presentation.transcript
+    // Match final transcript leading whitespace cleanup without changing streamed word boundaries.
+    transcript = String(presentation.transcript.drop(while: \.isWhitespace))
     message = presentation.message
     pendingCount = presentation.pendingCount
     isLocked = presentation.isLocked

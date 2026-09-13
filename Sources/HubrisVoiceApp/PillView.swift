@@ -91,6 +91,7 @@ struct PillView: View {
       styledTranscript
         .font(font)
         .foregroundStyle(Color.fog)
+        .multilineTextAlignment(.leading)
         .fixedSize(horizontal: false, vertical: true)
         .frame(width: model.textWidth, alignment: .topLeading)
         .frame(
