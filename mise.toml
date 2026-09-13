@@ -129,6 +129,7 @@ depends = [
   "lint:config",
   "lint:architecture",
   "lint:workflows",
+  "lint:vendor",
 ]
 
 [tasks."lint:fix"]
@@ -179,6 +180,63 @@ run = "tail -F \"${HOME}/Library/Logs/HubrisVoice/realtime.log\""
 description = "Remove Swift build outputs"
 run = "swift package clean"
 
+[tasks."experiment:stt:audio"]
+description = "Generate synthetic local STT experiment recordings with macOS TTS"
+run = "/usr/bin/python3 Experiments/LocalSTT/prepare_audio.py"
+
+[tasks."experiment:stt:setup"]
+description = "Download and verify pinned local STT experiment models and native libraries"
+run = "/usr/bin/python3 Experiments/LocalSTT/workflow.py setup"
+
+[tasks."experiment:stt:build"]
+description = "Build the isolated Swift FluidAudio and sherpa-onnx experiment runners"
+run = "/usr/bin/python3 Experiments/LocalSTT/workflow.py build"
+
+[tasks."experiment:stt:run"]
+description = "Run prepared local STT experiments serially with network access denied"
+run = "/usr/bin/python3 Experiments/LocalSTT/workflow.py run"
+
+[tasks."experiment:stt:report"]
+description = "Summarize local STT experiment transcripts, dictionary recovery, and timing"
+run = "/usr/bin/python3 Experiments/LocalSTT/report.py"
+
+[tasks."experiment:stt:record"]
+description = "Open the local phrase recorder; benchmark automatically after 18 accepted takes"
+depends = ["experiment:stt:build"]
+run = "/usr/bin/python3 Experiments/LocalSTT/human_recordings.py launch"
+
+[tasks."experiment:stt:human"]
+description = "Rerun the offline comparison of the 18 accepted human recordings"
+run = "/usr/bin/python3 Experiments/LocalSTT/human_recordings.py run"
+
+[tasks."experiment:stt:correction:prepare"]
+description = "Prepare isolated human correction fixtures and validate exact-alias rules"
+run = "/usr/bin/python3 Experiments/LocalSTT/correction_sweep.py prepare"
+
+[tasks."experiment:stt:correction:run"]
+description = "Sweep FluidAudio correction controls against the prepared human corpus"
+run = "/usr/bin/python3 Experiments/LocalSTT/correction_sweep.py run"
+
+[tasks."experiment:stt:correction:report"]
+description = "Compare correction gains, paired regressions, and excess dictionary mentions"
+run = "/usr/bin/python3 Experiments/LocalSTT/correction_sweep.py report"
+
+[tasks."experiment:stt:correction:probe"]
+description = "Verify raw and corrected text are available from one FluidAudio inference run"
+run = "/usr/bin/python3 Experiments/LocalSTT/correction_sweep.py probe"
+
+[tasks."experiment:stt:cache:prepare"]
+description = "Copy verified local STT assets to a dedicated Hubris-owned experiment directory"
+run = "/usr/bin/python3 Experiments/LocalSTT/cache_isolation.py prepare"
+
+[tasks."experiment:stt:cache:run"]
+description = "Probe explicit model roots with network and shared-cache access denied"
+run = "/usr/bin/python3 Experiments/LocalSTT/cache_isolation.py run"
+
+[tasks."experiment:stt:cache:verify"]
+description = "Validate cache-isolation results, expected failure, and asset integrity"
+run = "/usr/bin/python3 Experiments/LocalSTT/cache_isolation.py verify"
+
 [tasks."bundle:debug"]
 description = "Build and sign a debug app with development diagnostics support"
 run = "./Scripts/bundle.sh debug"
@@ -219,3 +277,19 @@ run = "swift run --package-path Tools/ReleaseTool hubris-voice-release upload-as
 [tasks."release:publish"]
 description = "Publish the verified GitHub Release"
 run = "swift run --package-path Tools/ReleaseTool hubris-voice-release publish"
+
+[tasks."lint:vendor"]
+description = "Verify pinned FluidAudio source and its privacy patch"
+run = "./Scripts/verify-vendored-fluidaudio.sh"
+
+[tasks."smoke:local:install"]
+description = "Explicitly download and verify pinned local models in a Hubris-owned smoke directory (711 MB)"
+run = "HUBRIS_LOCAL_MODEL_INSTALL_SMOKE=1 swift test --filter LocalModelInstallationSmokeTests"
+
+[tasks."smoke:local:runtime"]
+description = "Run native local transcription with network and shared SDK cache access denied (requires experiment fixtures)"
+run = "./Scripts/smoke-local-runtime.sh"
+
+[tasks."smoke:local:ui"]
+description = "Render native local settings to .build/local-ui for visual inspection"
+run = "HUBRIS_LOCAL_UI_SMOKE=1 swift test --filter LocalSettingsRenderingTests"

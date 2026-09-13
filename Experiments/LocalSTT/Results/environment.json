@@ -1,0 +1,14 @@
+{
+  "date": "2026-09-13T20:27:45Z",
+  "cpu": "Apple M3 Max",
+  "memory_bytes": 68719476736,
+  "macos": "27.0",
+  "xcode": "Xcode 27.0\nBuild version 27A266a",
+  "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.0.0",
+  "network_during_measurement": "Denied by sandbox-exec profile",
+  "audio_source": "macOS say, Daniel and Samantha, 165 words/minute",
+  "native_source_versions": {
+    "FluidAudio": "0.15.7",
+    "sherpa-onnx": "1.13.8"
+  }
+}

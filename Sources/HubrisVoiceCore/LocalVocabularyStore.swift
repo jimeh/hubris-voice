@@ -1,0 +1,58 @@
+import Foundation
+
+public enum LocalVocabularyStore {
+  public enum StoreError: Error {
+    case invalidEncoding
+  }
+
+  public enum Key {
+    public static let vocabulary = "localTranscription.vocabulary"
+    public static let cloudSeedCompleted = "localTranscription.vocabulary.cloudSeedCompleted"
+  }
+
+  private struct Payload: Codable {
+    let version: Int
+    let entries: [LocalVocabularyEntry]
+  }
+
+  public static func load(from store: SettingsStore) -> [LocalVocabularyEntry] {
+    guard
+      let encoded = store.string(Key.vocabulary),
+      let data = encoded.data(using: .utf8),
+      let payload = try? JSONDecoder().decode(Payload.self, from: data),
+      payload.version == 1
+    else {
+      return []
+    }
+    return payload.entries
+  }
+
+  public static func save(_ entries: [LocalVocabularyEntry], to store: SettingsStore) throws {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    let data = try encoder.encode(Payload(version: 1, entries: entries))
+    guard let encoded = String(bytes: data, encoding: .utf8) else {
+      throw StoreError.invalidEncoding
+    }
+    store.set(encoded, for: Key.vocabulary)
+  }
+
+  @discardableResult
+  public static func seedFromCloudIfNeeded(
+    _ cloudCanonicalTexts: [String],
+    in store: SettingsStore
+  ) throws -> [LocalVocabularyEntry] {
+    if store.bool(Key.cloudSeedCompleted) == true {
+      return load(from: store)
+    }
+
+    if store.string(Key.vocabulary) == nil {
+      let entries = cloudCanonicalTexts.map {
+        LocalVocabularyEntry(canonicalText: $0)
+      }
+      try save(entries, to: store)
+    }
+    store.set(true, for: Key.cloudSeedCompleted)
+    return load(from: store)
+  }
+}

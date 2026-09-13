@@ -138,6 +138,11 @@ public struct MacOSReleaseService: Sendable {
       ]
     )
 
+    try copyResourceBundles(
+      from: arm64Binary.deletingLastPathComponent(),
+      to: stageApp.appending(path: "Contents/Resources")
+    )
+
     let stagedPlist = stageApp.appending(path: "Contents/Info.plist")
     var plist = try readPropertyList(paths.infoPlist)
     plist["SUFeedURL"] = "https://github.com/jimeh/hubris-voice/releases/latest/download/appcast.xml"
@@ -177,6 +182,19 @@ public struct MacOSReleaseService: Sendable {
     )
     try ReleaseFiles.removeIfPresent(paths.app)
     try FileManager.default.moveItem(at: stageApp, to: paths.app)
+  }
+
+  private func copyResourceBundles(from binaryDirectory: URL, to resourcesDirectory: URL) throws {
+    let resourceBundles = try FileManager.default.contentsOfDirectory(
+      at: binaryDirectory,
+      includingPropertiesForKeys: nil
+    ).filter { $0.pathExtension == "bundle" }
+    for resourceBundle in resourceBundles {
+      try ReleaseFiles.copy(
+        resourceBundle,
+        to: resourcesDirectory.appending(path: resourceBundle.lastPathComponent)
+      )
+    }
   }
 
   private func buildSlice(architecture: String, triple: String) throws -> URL {

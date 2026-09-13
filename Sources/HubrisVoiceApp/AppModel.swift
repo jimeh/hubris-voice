@@ -172,6 +172,7 @@ final class AppModel: ObservableObject {
   @Published private(set) var lastAttentionAt: Date?
 
   let overlayModel = OverlayViewModel()
+  let localModels: LocalModelsController
   weak var overlayController: OverlayController? {
     didSet { overlayController?.lineCap = overlayLineCap }
   }
@@ -181,10 +182,10 @@ final class AppModel: ObservableObject {
   }
 
   var connectionSummary: String {
-    switch session.connection {
-    case .unconfigured:
+    switch session.readiness {
+    case .unavailable:
       "Add an API key"
-    case .connecting, .disconnected:
+    case .preparing, .recovering:
       "Reconnecting…"
     case .ready:
       "Connected · \(dictionaryTermSummary) · \(languageSummary)"
@@ -206,9 +207,9 @@ final class AppModel: ObservableObject {
     case .finalizing: "ellipsis.circle"
     case .attention: "exclamationmark.circle"
     case nil:
-      switch session.connection {
-      case .connecting, .disconnected: "ellipsis.circle"
-      case .ready, .unconfigured: "waveform.circle"
+      switch session.readiness {
+      case .preparing, .recovering: "ellipsis.circle"
+      case .ready, .unavailable: "waveform.circle"
       }
     }
   }
@@ -218,10 +219,10 @@ final class AppModel: ObservableObject {
     case .listening: .signalBlue
     case .finalizing, .attention: .voiceCoral
     case nil:
-      switch session.connection {
+      switch session.readiness {
       case .ready: .completionMint
-      case .connecting, .disconnected: .voiceCoral
-      case .unconfigured: .secondary
+      case .preparing, .recovering: .voiceCoral
+      case .unavailable: .secondary
       }
     }
   }
@@ -231,7 +232,13 @@ final class AppModel: ObservableObject {
     return message
   }
 
-  private let client = RealtimeTranscriptionClient()
+  private var backend: OpenAITranscriptionBackend?
+  private var localBackend: FluidAudioTranscriptionBackend?
+  private var activeEngine: TranscriptionEngineSelection
+  private var activeLocalEntries: [LocalVocabularyEntry]
+  private var changingEngine = false
+  private var localModelManuallyUnloaded = false
+  private let engine: TranscriptionEngineCoordinator
   private let audioCapture = AudioCapture()
   private let shortcutMonitor = ShortcutMonitor()
   private let insertionService = TextInsertionService()
@@ -240,7 +247,6 @@ final class AppModel: ObservableObject {
   private let loginItemService = LoginItemService()
   private let updater = NativeUpdater()
   private let defaults: UserDefaults
-  private let reconnectScheduler = DelayedActionScheduler()
   private let dismissScheduler = DelayedActionScheduler()
   private let configurationScheduler = DelayedActionScheduler()
   private let historyPersistenceScheduler = DelayedActionScheduler()
@@ -255,14 +261,14 @@ final class AppModel: ObservableObject {
   private var buffers: [Int: AudioSnippetBuffer] = [:]
   private var currentAnchor: OverlayAnchor?
   private var streamingGeneration: Int?
+  private var audioSequences: [Int: Int] = [:]
   private var finalizingTimers: [Int: Task<Void, Never>] = [:]
   private var eventTask: Task<Void, Never>?
+  private var configurationEventTask: Task<Void, Never>?
   private let captureFinalizer = CaptureFinalizer()
+  private let capturedAudioMailbox = CapturedAudioMailbox()
   private let insertionQueue = InsertionQueue()
   private var permissionPollingTask: Task<Void, Never>?
-  private var transportTask: Task<Void, Never>?
-  private var transportAttemptID: String?
-  private var commitGenerations: [String: Int] = [:]
   private var workspaceObservers: [NSObjectProtocol] = []
   private var recordingStartedAt: Date?
   private var releasedAt: [Int: Date] = [:]
@@ -281,15 +287,33 @@ final class AppModel: ObservableObject {
   // swiftlint:disable:next function_body_length
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
+    localModels = LocalModelsController(settings: defaults)
     let historyStore = TranscriptHistoryStore()
     self.historyStore = historyStore
-    let storedAPIKey = (try? keychain.readAPIKey()) ?? ""
+    let storedAPIKey = localModels.engine == .openAI ? (try? keychain.readAPIKey()) ?? "" : ""
     let loginItemStatus = LoginItemService().status
     var settings = DictationSettings.load(from: defaults)
     if loginItemStatus == .enabled {
       settings.launchAtLogin = true
     }
     self.settings = settings
+    activeEngine = localModels.engine
+    activeLocalEntries = localModels.entries
+    let runtime: any TranscriptionEngineRuntime
+    if activeEngine == .openAI {
+      let cloud = OpenAITranscriptionBackend(apiKey: storedAPIKey, configuration: settings.sessionConfiguration)
+      backend = cloud
+      runtime = cloud
+    } else {
+      let local = FluidAudioTranscriptionBackend(
+        store: localModels.store,
+        context: LocalInvocationContext(permanentEntries: localModels.entries),
+        correctionPolicy: localModels.correctionEnabled ? .strict : .disabled
+      )
+      localBackend = local
+      runtime = local
+    }
+    engine = TranscriptionEngineCoordinator(runtime: runtime, epoch: .init(0))
     history = settings.history.persist
       ? (try? historyStore.load()) ?? TranscriptHistory()
       : TranscriptHistory()
@@ -321,15 +345,27 @@ final class AppModel: ObservableObject {
     shortcutConflict = Self.conflictMessage(for: settings.shortcuts)
     lastAttentionAt = nil
     session = DictationSession(
-      configuration: .init(tapToLock: settings.tapToLock),
-      hasKey: !storedAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      configuration: .init(tapToLock: settings.tapToLock, format: activeEngine.format),
+      readiness: activeEngine == .fluidAudio
+        ? .preparing(message: "Loading local model…")
+        : storedAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        ? .unavailable(reason: "Add an OpenAI API key before dictating.", action: nil)
+        : .preparing(message: "Connecting…")
     )
     phaseTitle = session.phaseTitle
     settings.save(to: defaults)
     audioCapture.preferredDeviceUID = settings.inputDeviceUID
 
     audioCapture.onChunk = { [weak self] data in
-      Task { @MainActor [weak self] in self?.handleAudioChunk(data) }
+      guard let self else { return }
+      switch capturedAudioMailbox.enqueue(data) {
+      case .scheduled:
+        Task { @MainActor [weak self] in self?.drainCapturedAudio() }
+      case .full(let generation):
+        Task { @MainActor [weak self] in self?.apply(.bufferFull(generation: generation)) }
+      case .queued, .inactive:
+        break
+      }
     }
     audioCapture.onLevel = { [weak self] level in
       Task { @MainActor [weak self] in self?.overlayModel.record(level: level) }
@@ -353,6 +389,10 @@ final class AppModel: ObservableObject {
     }
     applyShortcutSet(settings.shortcuts)
     shortcutMonitor.isSuspended = !dictationEnabled
+    DevelopmentTrace.shared.localTranscriptionSelected = activeEngine == .fluidAudio
+    localModels.onConfigurationChanged = { [weak self] in self?.requestEngineConfiguration() }
+    localModels.onLoad = { [weak self] in self?.loadLocalModel() }
+    localModels.onUnload = { [weak self] in await self?.unloadLocalModel() }
   }
 
   func start() {
@@ -364,16 +404,17 @@ final class AppModel: ObservableObject {
     startShortcutIfPermitted()
     observeReconnectSignals()
 
-    eventTask = Task { [weak self, events = client.events] in
+    eventTask = Task { [weak self, events = engine.events] in
       for await event in events {
         guard let self else { return }
-        handle(event)
+        handleEngineEvent(event)
       }
     }
+    observeCloudConfiguration()
     Task { [weak self] in
       guard let self else { return }
-      await client.start()
-      await MainActor.run { self.apply(.connectRequested(force: false)) }
+      await localModels.refresh()
+      prepareSelectedEngine()
     }
   }
 
@@ -393,10 +434,7 @@ final class AppModel: ObservableObject {
         ? "Add an OpenAI API key to connect."
         : apiKeyChanged ? "Saved. Reconnecting…" : "Saved."
       guard apiKeyChanged else { return }
-      apply(.credentialsChanged(hasKey: !apiKey.isEmpty))
-      if !previousAPIKey.isEmpty, !apiKey.isEmpty {
-        apply(.connectRequested(force: true))
-      }
+      Task { [backend] in await backend?.updateCredentials(apiKey) }
     } catch {
       settingsMessage = error.localizedDescription
     }
@@ -493,7 +531,7 @@ final class AppModel: ObservableObject {
   }
 
   func reconnect() {
-    apply(.connectRequested(force: true))
+    Task { [backend] in await backend?.requestReconnect() }
   }
 
   var updatesAvailable: Bool {
@@ -552,6 +590,10 @@ final class AppModel: ObservableObject {
     let oldSettings = settings
     update(&settings)
     settings.save(to: defaults)
+    guard activeEngine == .openAI else {
+      configurationState = .applied
+      return
+    }
     switch ConfigurationUpdatePolicy().decision(
       from: oldSettings,
       to: settings,
@@ -578,7 +620,8 @@ final class AppModel: ObservableObject {
 
   private func sendConfigurationUpdateWhenIdle() {
     configurationUpdateScheduled = false
-    guard session.connection == .ready, session.listening == nil, session.pending.isEmpty else {
+    guard activeEngine == .openAI, let backend else { return }
+    guard session.readiness == .ready, isQuiescent else {
       configurationUpdateDeferred = true
       return
     }
@@ -587,16 +630,20 @@ final class AppModel: ObservableObject {
     if configurationNeedsReconnect {
       configurationNeedsReconnect = false
       pendingConfigurationAcks = 0
-      apply(.connectRequested(force: true))
+      let configuration = settings.sessionConfiguration
+      Task { [weak self, backend] in
+        let sent = await backend.updateConfiguration(configuration, reconnect: true)
+        guard let self, !sent else { return }
+        configurationUpdateDeferred = true
+      }
       return
     }
     pendingConfigurationAcks += 1
     let configuration = settings.sessionConfiguration
-    let attemptID = transportAttemptID
     Task { [weak self] in
-      guard let self else { return }
-      let sent = await client.updateSession(configuration)
-      if !sent, attemptID == transportAttemptID {
+      guard let self, let backend = self.backend else { return }
+      let sent = await backend.updateConfiguration(configuration, reconnect: false)
+      if !sent {
         configurationUpdateDeferred = true
         pendingConfigurationAcks = max(
           0,
@@ -631,11 +678,11 @@ final class AppModel: ObservableObject {
       }
       updateHistory(id: entryID, outcome: outcome.historyOutcome)
       presentedHistoryEntryID = outcome == .rejected ? entryID : nil
-    case .commitRejected(let generation, _):
+    case .engine(.failure(_, let invocationID?, _)):
+      let generation = invocationID.generation
       guard let snippet = session.pending.first(where: { $0.generation == generation }) else { return nil }
-      presentedHistoryEntryID = recordTranscript(
-        generation: generation,
-        text: snippet.transcript,
+      presentedHistoryEntryID = recordUnfinishedTranscript(
+        snippet,
         outcome: .rejected
       )
     case .finalizingTimedOut(let generation):
@@ -645,19 +692,20 @@ final class AppModel: ObservableObject {
       else {
         return nil
       }
-      let entryID = recordTranscript(
-        generation: generation,
-        text: snippet.transcript,
+      let entryID = recordUnfinishedTranscript(
+        snippet,
         outcome: .timedOut
       )
       presentedHistoryEntryID = entryID
     case .cancelRequested:
       if let listening = session.listening {
         recordCancelledTranscript(listening)
-      } else if session.presented != nil {
-        presentedHistoryEntryID = nil
       } else {
-        for snippet in session.pending where !snippet.transcript.isEmpty {
+        let cancellable = session.pending + session.inserting.filter { !$0.isInsertionStarted }
+        if cancellable.isEmpty, session.presented != nil {
+          presentedHistoryEntryID = nil
+        }
+        for snippet in cancellable where !snippet.transcript.isEmpty {
           recordCancelledTranscript(snippet)
         }
       }
@@ -665,7 +713,7 @@ final class AppModel: ObservableObject {
       if let listening = session.listening {
         presentedHistoryEntryID = recordCancelledTranscript(listening)
       }
-    case .server(.error):
+    case .engine(.failure(_, nil, _)):
       if let listening = session.listening {
         presentedHistoryEntryID = recordCancelledTranscript(listening)
       }
@@ -706,11 +754,23 @@ final class AppModel: ObservableObject {
   private func recordCancelledTranscript(
     _ snippet: DictationSession.Snippet
   ) -> UUID? {
-    guard !snippet.transcript.isEmpty else { return nil }
+    recordUnfinishedTranscript(snippet, outcome: .cancelled)
+  }
+
+  @discardableResult
+  private func recordUnfinishedTranscript(
+    _ snippet: DictationSession.Snippet,
+    outcome: TranscriptEntry.Outcome
+  ) -> UUID? {
+    if let entryID = historyEntryIDs[snippet.generation] {
+      updateHistory(id: entryID, outcome: outcome)
+      return entryID
+    }
+    guard activeEngine == .openAI, !snippet.transcript.isEmpty else { return nil }
     return recordTranscript(
       generation: snippet.generation,
       text: snippet.transcript,
-      outcome: .cancelled
+      outcome: outcome
     )
   }
 
@@ -804,41 +864,40 @@ final class AppModel: ObservableObject {
     }
     publishSessionState()
     resumeDeferredConfigurationUpdateIfIdle()
+    localModels.isDictating = !isQuiescent
+    if localModels.pendingConfiguration, isQuiescent, !changingEngine {
+      Task { [weak self] in await self?.replaceSelectedEngine() }
+    }
   }
 
   // This switch is a direct, exhaustive interpreter for the core effect enum.
   // swiftlint:disable:next cyclomatic_complexity
   private func interpret(_ effect: DictationSession.Effect) {
     switch effect {
-    case .startCapture(let generation):
+    case .startCapture(let invocation):
       if startStopSoundsEnabled {
         soundCues.playStart()
       }
-      startCapture(generation: generation)
+      startCapture(invocation: invocation)
     case .stopCapture:
       if startStopSoundsEnabled {
         soundCues.playStop()
       }
       stopCaptureAfterGrace()
-    case .replayAudio(let generation): client.outbound.replay(buffers[generation]?.chunks ?? [])
-    case .commitAudio(let generation):
-      let attemptID = transportAttemptID
-      captureFinalizer.commitAfterStop(generation: generation) { [weak self] in
-        guard let self, transportAttemptID == attemptID, session.connection == .ready else { return }
-        let eventID = client.outbound.commitAudio()
-        commitGenerations[eventID] = generation
+    case .beginTranscription(let invocation):
+      // A rapid press must flush the previous generation's grace audio and
+      // finish command before this begin can change the backend input owner.
+      audioCapture.finishSegment()
+      for chunk in capturedAudioMailbox.transition(to: invocation.id.generation) {
+        handleAudioChunk(chunk.data, generation: chunk.generation)
       }
-    case .clearAudio(let generation):
-      if generation == streamingGeneration {
-        client.outbound.clearAudio()
+      captureFinalizer.finish(keepingCaptureRunning: true)
+      submitEngineCommand(.begin(invocation))
+    case .finishTranscription(let invocationID):
+      captureFinalizer.commitAfterStop(generation: invocationID.generation) { [weak self] in
+        self?.submitEngineCommand(.finish(id: invocationID))
       }
-    case .connect: enqueueConnect()
-    case .disconnect: enqueueDisconnect()
-    case .scheduleReconnect(let delay, let attempt):
-      reconnectScheduler.schedule(after: delay) { [weak self] in
-        self?.apply(.reconnectDelayElapsed(attempt: attempt))
-      }
-    case .cancelReconnect: reconnectScheduler.cancel()
+    case .cancelTranscription(let invocationID): submitEngineCommand(.cancel(id: invocationID))
     case .scheduleFinalizingTimeout(let generation, let delay):
       scheduleFinalizingTimeout(generation: generation, delay: delay)
     case .cancelFinalizingTimeout(let generation): cancelFinalizingTimeout(generation: generation)
@@ -892,8 +951,14 @@ final class AppModel: ObservableObject {
       apply(.pressed)
       return
     }
-    let hasKey = !savedAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    guard hasKey else {
+    guard !changingEngine, !localModels.pendingConfiguration else {
+      apply(.localError(message: "Waiting for the engine change to finish."))
+      return
+    }
+    if activeEngine == .fluidAudio, localModels.loadState == .unloaded {
+      loadLocalModel()
+    }
+    guard session.readiness.permitsBoundedCapture else {
       apply(.pressed)
       return
     }
@@ -987,63 +1052,58 @@ final class AppModel: ObservableObject {
     }
   }
 
-  private func handle(_ event: RealtimeTransportEvent) {
-    guard event.belongsTo(transportAttemptID) else { return }
-    switch event.payload {
-    case .server(.sessionReady):
-      pendingConfigurationAcks = max(
-        0,
-        pendingConfigurationAcks - 1
-      )
-      if
-        pendingConfigurationAcks == 0,
-        !configurationUpdateScheduled,
-        !configurationUpdateDeferred
+  private func handleConfigurationEvent(_ event: OpenAIConfigurationEvent) {
+    switch event {
+    case .applied:
+      pendingConfigurationAcks = max(0, pendingConfigurationAcks - 1)
+      if pendingConfigurationAcks == 0,
+         !configurationUpdateScheduled,
+         !configurationUpdateDeferred
       {
         configurationState = .applied
       }
       settingsMessage = "Connected with \(dictionaryWords.count) dictionary term\(dictionaryWords.count == 1 ? "" : "s")."
-      apply(.sessionReady)
-    case .server(.error(let message, let eventID)):
-      if let eventID, let generation = commitGenerations.removeValue(forKey: eventID) {
-        apply(.commitRejected(generation: generation, message: message))
-        return
-      }
-      if configurationState == .pending {
-        pendingConfigurationAcks = 0
-        configurationState = .failed(message)
-      }
-      apply(.server(.error(message: message)))
-    case .server(let event):
-      apply(.server(event))
-    case .connectionLost(let message):
+    case .failed(let message):
       pendingConfigurationAcks = 0
-      apply(.connectionLost(message: message))
+      configurationState = .failed(message)
     }
   }
 
-  private func handleAudioChunk(_ data: Data) {
-    guard let generation = streamingGeneration, var buffer = buffers[generation] else { return }
+  private func drainCapturedAudio() {
+    for chunk in capturedAudioMailbox.drain() {
+      handleAudioChunk(chunk.data, generation: chunk.generation)
+    }
+  }
+
+  private func handleAudioChunk(_ data: Data, generation: Int) {
+    let snippet = ([session.listening].compactMap(\.self) + session.pending)
+      .first { $0.generation == generation }
+    guard generation == streamingGeneration, var buffer = buffers[generation],
+          let snippet
+    else { return }
     let result = buffer.append(data)
     buffers[generation] = buffer
-    if result == .stored, session.connection == .ready {
-      client.outbound.appendAudio(data)
+    if result == .stored {
+      let sequence = audioSequences[generation, default: 0]
+      audioSequences[generation] = sequence + 1
+      submitEngineCommand(.append(id: snippet.id, sequence: sequence, audio: data))
     }
     if buffer.isFull {
       apply(.bufferFull(generation: generation))
     }
   }
 
-  private func startCapture(generation: Int) {
-    captureFinalizer.finish(keepingCaptureRunning: true)
+  private func startCapture(invocation: TranscriptionInvocation) {
+    let generation = invocation.id.generation
     let capturedFocus = insertionService.captureFocusedTarget()
     currentAnchor = insertionService.captureAnchor(for: capturedFocus)
-    buffers[generation] = AudioSnippetBuffer()
+    buffers[generation] = AudioSnippetBuffer(sampleRate: invocation.format.sampleRate)
+    audioSequences[generation] = 0
     streamingGeneration = generation
     recordingStartedAt = Date()
     overlayModel.beginListening()
     do {
-      try audioCapture.start()
+      try audioCapture.start(sampleRate: Double(invocation.format.sampleRate))
     } catch {
       apply(.localError(message: error.localizedDescription))
     }
@@ -1055,6 +1115,8 @@ final class AppModel: ObservableObject {
     captureFinalizer.schedule(generation: stoppingGeneration) { [weak self] in
       guard let self, streamingGeneration == stoppingGeneration else { return }
       audioCapture.stop()
+      drainCapturedAudio()
+      capturedAudioMailbox.deactivate(generation: stoppingGeneration)
       streamingGeneration = nil
     }
   }
@@ -1074,14 +1136,22 @@ final class AppModel: ObservableObject {
 
   private func discardSnippet(generation: Int) {
     buffers.removeValue(forKey: generation)
+    audioSequences.removeValue(forKey: generation)
     releasedAt.removeValue(forKey: generation)
     historyEntryIDs.removeValue(forKey: generation)
     cancelFinalizingTimeout(generation: generation)
   }
 
   private func insert(generation: Int, text: String) {
+    let expectedEpoch = session.epoch
     insertionQueue.enqueue { [weak self] in
       guard let self else { return }
+      guard session.epoch == expectedEpoch,
+            session.inserting.contains(where: {
+              $0.id == .init(epoch: expectedEpoch, generation: generation)
+            })
+      else { return }
+      apply(.insertionStarted(generation: generation))
       let context = insertionService.captureFocusedTarget().map {
         insertionService.currentTextContext(for: $0)
       } ?? InsertionFormatter.Context(textBeforeCaret: nil, textAfterCaret: nil)
@@ -1100,7 +1170,7 @@ final class AppModel: ObservableObject {
       smartLeadingSpace: smartLeadingSpace,
       trailingSpace: trailingSpace,
       adjustCaseAfterComma: adjustCaseAfterComma,
-      protectedTerms: dictionaryWords
+      protectedTerms: activeEngine == .fluidAudio ? activeLocalEntries.map(\.canonicalText) : dictionaryWords
     )
   }
 
@@ -1137,38 +1207,10 @@ final class AppModel: ObservableObject {
     }
   }
 
-  private func enqueueConnect() {
-    let attemptID = UUID().uuidString
-    transportAttemptID = attemptID
-    commitGenerations.removeAll()
-    client.outbound.setAttempt(attemptID)
-    let previous = transportTask
-    transportTask = Task { [weak self] in
-      _ = await previous?.value
-      guard !Task.isCancelled, let self, transportAttemptID == attemptID else { return }
-      do {
-        try await client.connect(
-          apiKey: savedAPIKey,
-          configuration: settings.sessionConfiguration,
-          attemptID: attemptID
-        )
-      } catch is CancellationError {
-        return
-      } catch {
-        guard !Task.isCancelled, transportAttemptID == attemptID else { return }
-        apply(.connectionFailed(message: error.localizedDescription))
-        settingsMessage = error.localizedDescription + " Debug log: \(DiagnosticLog.displayPath)"
-      }
-    }
-  }
-
-  private func enqueueDisconnect() {
-    transportAttemptID = nil
-    commitGenerations.removeAll()
-    client.outbound.setAttempt(nil)
-    transportTask?.cancel()
-    transportTask = Task { [weak self] in
-      await self?.client.disconnect()
+  private func submitEngineCommand(_ command: TranscriptionEngineCommand) {
+    guard engine.submit(command) else {
+      apply(.localError(message: "The transcription engine is not accepting audio."))
+      return
     }
   }
 
@@ -1178,7 +1220,7 @@ final class AppModel: ObservableObject {
       object: nil,
       queue: .main
     ) { [weak self] _ in
-      Task { @MainActor [weak self] in self?.apply(.connectRequested(force: false)) }
+      Task { [weak self] in await self?.backend?.requestReconnect() }
     }
     let sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
       forName: NSWorkspace.willSleepNotification,
@@ -1193,7 +1235,7 @@ final class AppModel: ObservableObject {
     workspaceObservers = [wakeObserver, sleepObserver]
     networkMonitor.pathUpdateHandler = { [weak self] path in
       guard path.status == .satisfied else { return }
-      Task { @MainActor [weak self] in self?.apply(.connectRequested(force: false)) }
+      Task { [weak self] in await self?.backend?.requestReconnect() }
     }
     networkMonitor.start(queue: networkQueue)
   }
@@ -1300,4 +1342,175 @@ private struct InsertionTelemetry {
   let releasedAt: Date?
 }
 
-// swiftlint:enable file_length type_body_length
+// swiftlint:enable type_body_length
+
+private extension AppModel {
+  var isQuiescent: Bool {
+    session.listening == nil && session.pending.isEmpty && session.inserting.isEmpty
+  }
+
+  func observeCloudConfiguration() {
+    configurationEventTask?.cancel()
+    guard let backend else { return }
+    let epoch = engine.epoch
+    configurationEventTask = Task { [weak self, events = backend.configurationEvents] in
+      for await event in events {
+        guard let self, activeEngine == .openAI, engine.epoch == epoch else { continue }
+        handleConfigurationEvent(event)
+      }
+    }
+  }
+
+  func handleEngineEvent(_ event: TranscriptionEngineEvent) {
+    let epoch: TranscriptionBackendEpoch = switch event {
+    case .readiness(let epoch, _), .failure(let epoch, _, _): epoch
+    case .preview(let invocation, _), .final(let invocation, _): invocation.epoch
+    }
+    guard epoch == engine.epoch else { return }
+    if activeEngine == .fluidAudio {
+      switch event {
+      case .readiness(_, .ready): localModels.loadState = .loaded
+      case .readiness(_, .preparing): localModels.loadState = .loading
+      case .readiness(_, .unavailable(let reason, _)):
+        localModels.loadState = .failed(reason)
+      case .final(_, let result) where result.correction == .degraded:
+        localModels.message = "Dictionary correction was unavailable. The uncorrected transcript was used."
+      default: break
+      }
+    }
+    apply(.engine(event))
+  }
+
+  func prepareSelectedEngine() {
+    if activeEngine == .fluidAudio {
+      loadLocalModel()
+    } else {
+      _ = engine.submit(.prepare(epoch: engine.epoch))
+    }
+  }
+
+  func loadLocalModel() {
+    guard activeEngine == .fluidAudio, !changingEngine else { return }
+    guard localModels.modelID == LocalModelCatalog.primaryID else {
+      apply(.engine(.readiness(epoch: engine.epoch, state: .unavailable(
+        reason: "The selected local model is not supported by this app version.", action: nil
+      ))))
+      return
+    }
+    guard LocalModelsController.hardwareSupported else {
+      apply(.engine(.readiness(epoch: engine.epoch, state: .unavailable(
+        reason: "On-device transcription requires Apple Silicon.", action: nil
+      ))))
+      return
+    }
+    guard localModels.installedIDs.contains(LocalModelCatalog.primaryID) else {
+      apply(.engine(.readiness(epoch: engine.epoch, state: .unavailable(
+        reason: "The local model is not installed.", action: "Download it in Settings > Models."
+      ))))
+      return
+    }
+    guard localModels.loadState != .loaded, localModels.loadState != .loading else { return }
+    localModelManuallyUnloaded = false
+    localModels.loadState = .loading
+    apply(.engine(.readiness(epoch: engine.epoch, state: .preparing(message: "Loading local model…"))))
+    _ = engine.submit(.prepare(epoch: engine.epoch))
+  }
+
+  func requestEngineConfiguration() {
+    if localModels.engine != activeEngine {
+      localModelManuallyUnloaded = false
+    }
+    localModels.pendingConfiguration = true
+    guard isStarted, isQuiescent, !changingEngine else { return }
+    Task { [weak self] in await self?.replaceSelectedEngine() }
+  }
+
+  func unloadLocalModel() async {
+    guard activeEngine == .fluidAudio, isQuiescent, !changingEngine else { return }
+    localModelManuallyUnloaded = true
+    await replaceSelectedEngine(prewarm: false)
+  }
+
+  // swiftlint:disable:next function_body_length
+  func replaceSelectedEngine(prewarm: Bool = true) async {
+    guard isQuiescent, !changingEngine else { return }
+    changingEngine = true
+    localModels.isDictating = true
+    localModels.pendingConfiguration = false
+    let selection = localModels.engine
+    let context = LocalInvocationContext(permanentEntries: localModels.entries)
+    let policy: LocalCorrectionPolicy = localModels.correctionEnabled ? .strict : .disabled
+    if prewarm, selection == .fluidAudio, activeEngine == .fluidAudio,
+       localModels.modelID == LocalModelCatalog.primaryID, let localBackend
+    {
+      do {
+        while try await !localBackend.updateConfiguration(
+          context: context,
+          correctionPolicy: policy
+        ) {
+          try await Task.sleep(for: .milliseconds(25))
+        }
+      } catch {
+        changingEngine = false
+        localModels.isDictating = false
+        localModels.message = "The local transcription settings could not be applied."
+        if localModels.pendingConfiguration {
+          await replaceSelectedEngine()
+        }
+        return
+      }
+      activeLocalEntries = context.permanentEntries
+      changingEngine = false
+      localModels.isDictating = false
+      if localModels.pendingConfiguration {
+        await replaceSelectedEngine()
+      } else if !localModelManuallyUnloaded {
+        prepareSelectedEngine()
+      }
+      return
+    }
+    captureFinalizer.finish()
+    configurationEventTask?.cancel()
+    configurationScheduler.cancel()
+    configurationUpdateDeferred = false
+    configurationNeedsReconnect = false
+    pendingConfigurationAcks = 0
+    await backend?.shutdown()
+    backend = nil
+    await localBackend?.unload()
+    localBackend = nil
+    activeEngine = selection
+    activeLocalEntries = context.permanentEntries
+    DevelopmentTrace.shared.localTranscriptionSelected = selection == .fluidAudio
+    let runtime: any TranscriptionEngineRuntime
+    if selection == .openAI {
+      savedAPIKey = (try? keychain.readAPIKey()) ?? ""
+      apiKeyDraft = savedAPIKey
+      let cloud = OpenAITranscriptionBackend(apiKey: savedAPIKey, configuration: settings.sessionConfiguration)
+      backend = cloud
+      runtime = cloud
+    } else {
+      let local = FluidAudioTranscriptionBackend(store: localModels.store, context: context, correctionPolicy: policy)
+      localBackend = local
+      runtime = local
+    }
+    let epoch = TranscriptionBackendEpoch(engine.epoch.rawValue + 1)
+    engine.replace(runtime: runtime, epoch: epoch)
+    _ = session.setFormat(selection.format)
+    apply(.engineReplaced(epoch: epoch, readiness: .unavailable(
+      reason: selection == .fluidAudio ? "Local model unloaded." : "Preparing OpenAI…",
+      action: nil
+    )))
+    localModels.loadState = .unloaded
+    changingEngine = false
+    localModels.isDictating = false
+    observeCloudConfiguration()
+    if localModels.pendingConfiguration {
+      await replaceSelectedEngine()
+    } else if prewarm, !localModelManuallyUnloaded {
+      prepareSelectedEngine()
+    }
+  }
+}
+
+// swiftlint:enable file_length

@@ -1,86 +1,60 @@
 @testable import HubrisVoiceCore
 import XCTest
 
+// `id` consistently means a transcription invocation identity in these tests.
+// swiftlint:disable identifier_name
+
 final class DictationRecoveryTests: XCTestCase {
-  func testRetiredItemsCannotBeAdoptedByAnotherRecording() {
-    for shouldCancel in [true, false] {
-      var session = readySession()
+  func testCancelledAndTimedOutResultsCannotInsertIntoLaterRecording() throws {
+    for cancel in [true, false] {
+      var session = DictationSession(epoch: .init(2), readiness: .ready)
       _ = session.transition(.pressed)
+      let oldID = try XCTUnwrap(session.listening?.id)
       _ = session.transition(.released(heldDuration: 1))
-      _ = session.transition(.server(.inputCommitted(itemID: "old")))
-      _ = session.transition(shouldCancel ? .cancelRequested : .finalizingTimedOut(generation: 0))
+      _ = session.transition(cancel ? .cancelRequested : .finalizingTimedOut(generation: 0))
       _ = session.transition(.pressed)
-      _ = session.transition(.server(.transcriptDelta(itemID: "old", delta: "Old")))
-      XCTAssertNil(session.listening?.itemID)
-      _ = session.transition(.server(.transcriptDelta(itemID: "new", delta: "New")))
-      XCTAssertEqual(session.listening?.transcript, "New")
+      let newID = try XCTUnwrap(session.listening?.id)
       _ = session.transition(.released(heldDuration: 1))
-      XCTAssertEqual(session.transition(.server(.transcriptCompleted(itemID: "old", transcript: "Old text"))), [])
-      _ = session.transition(.server(.inputCommitted(itemID: "new")))
-      XCTAssertTrue(session.transition(.server(.transcriptCompleted(itemID: "new", transcript: "New text")))
-        .contains(.insert(generation: 1, text: "New text")))
+
+      XCTAssertEqual(final(&session, id: oldID, text: "Old text"), [])
+      XCTAssertTrue(final(&session, id: newID, text: "New text").contains(
+        .insert(generation: 1, text: "New text")
+      ))
     }
+  }
+
+  func testGlobalFailureFromRetiredEpochIsIgnored() {
+    var session = DictationSession(epoch: .init(4), readiness: .ready)
+    _ = session.transition(.engine(.failure(
+      epoch: .init(3),
+      id: nil,
+      failure: .init(kind: .transport, message: "old", isRecoverable: true)
+    )))
+    XCTAssertNil(session.presented)
   }
 
   func testDeliveryFailureKeepsTranscriptForRecovery() {
-    var session = readySession()
+    var session = DictationSession(readiness: .ready)
     _ = session.transition(.pasteLastRequested(text: "Recover me"))
-    _ = session.transition(.insertionFinished(generation: 0, outcome: .rejected, reason: .deliveryFailed))
+    _ = session.transition(.insertionFinished(
+      generation: 0,
+      outcome: .rejected,
+      reason: .deliveryFailed
+    ))
     XCTAssertEqual(session.presentation?.transcript, "Recover me")
     XCTAssertEqual(session.presentation?.message, "Could not send paste")
-    XCTAssertEqual(session.presentation?.mode, .attention)
   }
 
-  func testLateAcknowledgementCannotInsertCancelledOrTimedOutText() {
-    for shouldCancel in [true, false] {
-      var session = readySession()
-      _ = session.transition(.pressed)
-      _ = session.transition(.released(heldDuration: 1))
-      _ = session.transition(shouldCancel ? .cancelRequested : .finalizingTimedOut(generation: 0))
-      _ = session.transition(.pressed)
-      _ = session.transition(.released(heldDuration: 1))
-      _ = session.transition(.server(.inputCommitted(itemID: "old")))
-      XCTAssertEqual(session.transition(.server(.transcriptCompleted(itemID: "old", transcript: "Old text"))), [])
-      XCTAssertEqual(session.pending.map(\.generation), [1])
-      _ = session.transition(.server(.inputCommitted(itemID: "new")))
-      XCTAssertTrue(session.transition(.server(.transcriptCompleted(itemID: "new", transcript: "New text")))
-        .contains(.insert(generation: 1, text: "New text")))
-    }
-  }
-
-  func testRejectedCommitDoesNotConsumeTheNextAcknowledgement() {
-    for timedOut in [true, false] {
-      var session = readySession()
-      _ = session.transition(.pressed)
-      _ = session.transition(.released(heldDuration: 1))
-      if timedOut {
-        _ = session.transition(.finalizingTimedOut(generation: 0))
-      }
-      _ = session.transition(.pressed)
-      _ = session.transition(.commitRejected(generation: 0, message: "Empty buffer"))
-      XCTAssertEqual(session.listening?.generation, 1)
-      _ = session.transition(.released(heldDuration: 1))
-      _ = session.transition(.server(.inputCommitted(itemID: "next")))
-      XCTAssertTrue(session.transition(.server(.transcriptCompleted(itemID: "next", transcript: "Recovered")))
-        .contains(.insert(generation: 1, text: "Recovered")))
-    }
-  }
-
-  func testRejectedCommitRetainsItsPartialForRecovery() {
-    var session = readySession()
-    _ = session.transition(.pressed)
-    _ = session.transition(.server(.transcriptDelta(itemID: "partial", delta: "Recover this partial")))
-    _ = session.transition(.released(heldDuration: 1))
-    _ = session.transition(.commitRejected(generation: 0, message: "Rejected"))
-    XCTAssertEqual(session.presentation?.transcript, "Recover this partial")
-    XCTAssertEqual(session.presentation?.message, "Rejected")
-    XCTAssertTrue(session.pending.isEmpty)
-  }
-
-  private func readySession() -> DictationSession {
-    var session = DictationSession(hasKey: true)
-    _ = session.transition(.connectRequested(force: false))
-    _ = session.transition(.sessionReady)
-    return session
+  private func final(
+    _ session: inout DictationSession,
+    id: TranscriptionInvocationID,
+    text: String
+  ) -> [DictationSession.Effect] {
+    session.transition(.engine(.final(
+      id: id,
+      result: .init(text: text, correction: .disabled)
+    )))
   }
 }
+
+// swiftlint:enable identifier_name

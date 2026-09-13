@@ -11,11 +11,17 @@ let package = Package(
     .library(name: "HubrisVoiceCore", targets: ["HubrisVoiceCore"]),
     .executable(name: "HubrisVoice", targets: ["HubrisVoiceApp"]),
   ],
+  dependencies: [
+    .package(path: "Vendor/FluidAudio"),
+  ],
   targets: [
     .target(name: "HubrisVoiceCore"),
     .executableTarget(
       name: "HubrisVoiceApp",
-      dependencies: ["HubrisVoiceCore"]
+      dependencies: [
+        "HubrisVoiceCore",
+        .product(name: "FluidAudio", package: "FluidAudio"),
+      ]
     ),
     .testTarget(
       name: "HubrisVoiceCoreTests",

@@ -1,514 +1,285 @@
 @testable import HubrisVoiceCore
 import XCTest
 
+// `id` consistently means a transcription invocation identity in these tests.
+// swiftlint:disable force_try identifier_name
+
 final class DictationSessionTests: XCTestCase {
-  func testConnectionLossSchedulesFirstReconnectAttempt() {
+  func testPressBeginsGenerationAddressedInvocationAtCloudFormat() {
     var session = readySession()
+    let id = TranscriptionInvocationID(epoch: .init(7), generation: 0)
+    let invocation = TranscriptionInvocation(id: id, format: .openAI)
 
-    XCTAssertEqual(
-      session.transition(.connectionLost(message: "lost")),
-      [.scheduleReconnect(after: .milliseconds(500), attempt: 1)]
-    )
-    XCTAssertEqual(session.connection, .disconnected(attempt: 1))
-  }
-
-  func testRepeatedConnectionFailuresGrowAndCapReconnectDelay() {
-    let configuration = DictationSession.Configuration(
-      reconnect: ReconnectPolicy(maximumDelay: .seconds(1))
-    )
-    var session = DictationSession(configuration: configuration, hasKey: true)
-    _ = session.transition(.connectRequested(force: false))
-
-    XCTAssertEqual(
-      session.transition(.connectionFailed(message: "one")),
-      [.scheduleReconnect(after: .milliseconds(500), attempt: 1)]
-    )
-    _ = session.transition(.reconnectDelayElapsed(attempt: 1))
-    XCTAssertEqual(
-      session.transition(.connectionFailed(message: "two")),
-      [.scheduleReconnect(after: .seconds(1), attempt: 2)]
-    )
-    _ = session.transition(.reconnectDelayElapsed(attempt: 2))
-    XCTAssertEqual(
-      session.transition(.connectionFailed(message: "three")),
-      [.scheduleReconnect(after: .seconds(1), attempt: 3)]
-    )
-  }
-
-  func testStaleReconnectTimerCannotStartAConnection() {
-    var session = DictationSession(hasKey: true)
-
-    XCTAssertEqual(session.transition(.reconnectDelayElapsed(attempt: 1)), [])
-    XCTAssertEqual(session.connection, .disconnected(attempt: 0))
-  }
-
-  func testManualConnectDoesNotDuplicateAnAttemptAndSupersedesAReconnectTimer() {
-    var session = DictationSession(hasKey: true)
-    XCTAssertEqual(
-      session.transition(.connectRequested(force: false)),
-      [.cancelReconnect, .connect(attempt: 0)]
-    )
-    XCTAssertEqual(session.transition(.connectRequested(force: false)), [])
-  }
-
-  func testForcedReconnectClearsOldItemIdentityBeforeReplay() {
-    var session = readySession()
-    _ = makePending(in: &session, itemID: "old-item")
-
-    XCTAssertEqual(
-      session.transition(.connectRequested(force: true)),
-      [.disconnect, .cancelReconnect, .connect(attempt: 0)]
-    )
-    XCTAssertNil(session.pending.first?.itemID)
-    XCTAssertEqual(
-      session.transition(.sessionReady),
-      [.replayAudio(generation: 0), .commitAudio(generation: 0)]
-    )
-  }
-
-  func testRemovingCredentialsDisconnectsAndPressShowsAPIKeyError() {
-    var session = readySession()
-
-    XCTAssertEqual(
-      session.transition(.credentialsChanged(hasKey: false)),
-      [.disconnect, .cancelReconnect]
-    )
-    XCTAssertEqual(session.connection, .unconfigured)
     XCTAssertEqual(
       session.transition(.pressed),
-      [.scheduleDismiss(after: .seconds(4))]
+      [.cancelDismiss, .beginTranscription(invocation), .startCapture(invocation)]
     )
+    XCTAssertEqual(session.listening?.id, id)
+  }
+
+  func testUnavailableEngineExplainsWhyCaptureCannotStart() {
+    var session = DictationSession(
+      readiness: .unavailable(reason: "Model is missing.", action: "Download it in Settings.")
+    )
+    XCTAssertEqual(session.transition(.pressed), [.scheduleDismiss(after: .seconds(4))])
     XCTAssertEqual(
       session.presented,
-      .error(message: "Add an OpenAI API key before dictating.", text: "")
+      .error(message: "Model is missing. Download it in Settings.", text: "")
     )
   }
 
-  func testReleaseAfterMinimumCommitsAndSchedulesTimeout() {
-    var session = readySession()
-    XCTAssertEqual(session.transition(.pressed), [.cancelDismiss, .startCapture(generation: 0)])
+  func testPreparingAndRecoveringEnginesPermitBoundedCapture() {
+    for readiness in [
+      TranscriptionEngineReadiness.preparing(message: "Preparing…"),
+      .recovering(message: "Recovering…"),
+    ] {
+      var session = DictationSession(readiness: readiness)
+      XCTAssertTrue(session.transition(.pressed).contains { effect in
+        if case .startCapture = effect {
+          return true
+        }
+        return false
+      })
+    }
+  }
 
+  func testReleasePreservesEightSecondDeadlineAndFinishesAfterStop() throws {
+    var session = readySession()
+    _ = session.transition(.pressed)
+    let id = try XCTUnwrap(session.listening?.id)
     XCTAssertEqual(
       session.transition(.released(heldDuration: 0.2)),
       [
-        .stopCapture,
-        .commitAudio(generation: 0),
+        .stopCapture(generation: 0),
+        .finishTranscription(id: id),
         .scheduleFinalizingTimeout(generation: 0, after: .seconds(8)),
       ]
     )
-    XCTAssertEqual(session.pending.map(\.generation), [0])
   }
 
-  func testAccidentalTapClearsAndDiscardsWithoutCommit() {
+  func testAccidentalTapAndCancellationRetireInvocation() throws {
     var session = readySession()
     _ = session.transition(.pressed)
-
+    let id = try XCTUnwrap(session.listening?.id)
     XCTAssertEqual(
       session.transition(.released(heldDuration: 0.199)),
-      [.stopCapture, .clearAudio(generation: 0), .discardSnippet(generation: 0)]
-    )
-    XCTAssertTrue(session.pending.isEmpty)
-  }
-
-  func testTapToLockKeepsListeningUntilTheNextPress() {
-    let configuration = DictationSession.Configuration(tapToLock: true)
-    var session = readySession(configuration: configuration)
-    _ = session.transition(.pressed)
-
-    XCTAssertEqual(session.transition(.released(heldDuration: 0.1)), [])
-    XCTAssertTrue(session.isLocked)
-    XCTAssertEqual(session.listening?.generation, 0)
-    XCTAssertEqual(session.presentation?.message, "")
-    XCTAssertEqual(session.presentation?.isLocked, true)
-
-    XCTAssertEqual(
-      session.transition(.pressed),
       [
-        .stopCapture,
-        .commitAudio(generation: 0),
-        .scheduleFinalizingTimeout(generation: 0, after: .seconds(8)),
+        .stopCapture(generation: 0),
+        .cancelTranscription(id: id),
+        .discardSnippet(generation: 0),
       ]
     )
-    XCTAssertFalse(session.isLocked)
-    XCTAssertNil(session.listening)
-    XCTAssertEqual(session.transition(.released(heldDuration: 0.1)), [])
   }
 
-  func testCancelWhileLockedClearsTheLock() {
-    let configuration = DictationSession.Configuration(tapToLock: true)
-    var session = readySession(configuration: configuration)
+  func testTapToLockFinishesOnNextPress() {
+    var session = readySession(configuration: .init(tapToLock: true))
     _ = session.transition(.pressed)
     _ = session.transition(.released(heldDuration: 0.1))
-
-    XCTAssertEqual(
-      session.transition(.cancelRequested),
-      [.stopCapture, .clearAudio(generation: 0), .discardSnippet(generation: 0)]
-    )
-    XCTAssertFalse(session.isLocked)
-    XCTAssertNil(session.listening)
-  }
-
-  func testPressWhileDisconnectedCapturesImmediatelyThenReplaysWhenReady() {
-    var session = DictationSession(hasKey: true)
-
-    XCTAssertEqual(
-      session.transition(.pressed),
-      [
-        .cancelDismiss,
-        .cancelReconnect,
-        .connect(attempt: 0),
-        .startCapture(generation: 0),
-      ]
-    )
-    XCTAssertEqual(session.transition(.sessionReady), [.replayAudio(generation: 0)])
-  }
-
-  func testReleaseWhileConnectingReplaysThenCommitsWhenReady() {
-    var session = DictationSession(hasKey: true)
-    _ = session.transition(.pressed)
-
-    XCTAssertEqual(
-      session.transition(.released(heldDuration: 1)),
-      [.stopCapture, .scheduleFinalizingTimeout(generation: 0, after: .seconds(8))]
-    )
-    XCTAssertEqual(
-      session.transition(.sessionReady),
-      [.replayAudio(generation: 0), .commitAudio(generation: 0)]
-    )
-  }
-
-  func testConnectionLossDuringFinalizingReassignsCommitBeforeCompletion() {
-    var session = readySession()
-    _ = makePending(in: &session, itemID: "old")
-
-    _ = session.transition(.connectionLost(message: "lost"))
-    XCTAssertNil(session.pending.first?.itemID)
-    _ = session.transition(.reconnectDelayElapsed(attempt: 1))
-    XCTAssertEqual(
-      session.transition(.sessionReady),
-      [.replayAudio(generation: 0), .commitAudio(generation: 0)]
-    )
-    _ = session.transition(.server(.inputCommitted(itemID: "new")))
-    XCTAssertEqual(
-      session.transition(.server(.transcriptCompleted(itemID: "new", transcript: "text"))),
-      [
-        .cancelFinalizingTimeout(generation: 0),
-        .clearAudio(generation: 0),
-        .recordTranscript(generation: 0, text: "text"),
-        .insert(generation: 0, text: "text"),
-      ]
-    )
-  }
-
-  func testTranscriptEventsRouteByCommittedItemID() {
-    var session = readySession()
-    _ = makePending(in: &session, itemID: "item")
-
-    XCTAssertEqual(session.transition(.server(.transcriptDelta(itemID: "unknown", delta: "bad"))), [])
-    XCTAssertEqual(session.transition(.server(.transcriptDelta(itemID: "item", delta: "hel"))), [])
-    XCTAssertEqual(session.pending.first?.transcript, "hel")
-    XCTAssertEqual(
-      session.transition(.server(.transcriptCompleted(itemID: "item", transcript: "hello"))),
-      [
-        .cancelFinalizingTimeout(generation: 0),
-        .clearAudio(generation: 0),
-        .recordTranscript(generation: 0, text: "hello"),
-        .insert(generation: 0, text: "hello"),
-      ]
-    )
-  }
-
-  func testCompletedTranscriptRecordsBeforeInsertion() {
-    var session = readySession()
-    _ = makePending(in: &session, itemID: "item")
-
-    let effects = session.transition(
-      .server(.transcriptCompleted(itemID: "item", transcript: "hello"))
-    )
-
-    XCTAssertEqual(
-      effects,
-      [
-        .cancelFinalizingTimeout(generation: 0),
-        .clearAudio(generation: 0),
-        .recordTranscript(generation: 0, text: "hello"),
-        .insert(generation: 0, text: "hello"),
-      ]
-    )
-  }
-
-  func testEmptyCompletedTranscriptIsNotRecorded() {
-    var session = readySession()
-    _ = makePending(in: &session, itemID: "item")
-
-    let effects = session.transition(
-      .server(.transcriptCompleted(itemID: "item", transcript: "  \n"))
-    )
-
-    XCTAssertFalse(effects.contains { effect in
-      if case .recordTranscript = effect {
+    XCTAssertTrue(session.isLocked)
+    XCTAssertTrue(session.transition(.pressed).contains { effect in
+      if case .finishTranscription = effect {
         return true
       }
       return false
     })
   }
 
-  func testTwoPendingSnippetsCompleteOutOfOrderWithIndependentText() {
+  func testPreviewIsAReplacementForListeningAndPendingText() throws {
     var session = readySession()
-    _ = makePending(in: &session, itemID: "first")
-    _ = makePending(in: &session, itemID: "second")
-
-    XCTAssertEqual(session.pending.map(\.itemID), ["first", "second"])
-    XCTAssertEqual(
-      session.transition(.server(.transcriptCompleted(itemID: "second", transcript: "two"))).last,
-      .insert(generation: 1, text: "two")
-    )
-    XCTAssertEqual(
-      session.transition(.server(.transcriptCompleted(itemID: "first", transcript: "one"))).last,
-      .insert(generation: 0, text: "one")
-    )
+    _ = session.transition(.pressed)
+    let id = try XCTUnwrap(session.listening?.id)
+    _ = session.transition(.engine(.preview(id: id, text: "first")))
+    _ = session.transition(.engine(.preview(id: id, text: "replacement")))
+    XCTAssertEqual(session.listening?.transcript, "replacement")
+    _ = session.transition(.released(heldDuration: 1))
+    _ = session.transition(.engine(.preview(id: id, text: "pending replacement")))
+    XCTAssertEqual(session.pending.first?.transcript, "pending replacement")
   }
 
-  func testPendingLimitRefusesAnotherCapture() {
-    let configuration = DictationSession.Configuration(maximumPendingSnippets: 1)
-    var session = readySession(configuration: configuration)
+  func testFinalRecordsBeforeInsertionAndDuplicateIsIgnored() throws {
+    var session = pendingSession()
+    let id = try XCTUnwrap(session.pending.first?.id)
+    let event = TranscriptionEngineEvent.final(
+      id: id,
+      result: .init(text: " hello ", correction: .disabled)
+    )
+    XCTAssertEqual(
+      session.transition(.engine(event)),
+      [
+        .cancelFinalizingTimeout(generation: 0),
+        .recordTranscript(generation: 0, text: "hello"),
+        .insert(generation: 0, text: "hello"),
+      ]
+    )
+    XCTAssertEqual(session.transition(.engine(event)), [])
+  }
+
+  func testPendingSnippetsCanCompleteOutOfOrder() {
+    var session = readySession()
     _ = makePending(in: &session)
-
-    XCTAssertEqual(session.transition(.pressed), [.scheduleDismiss(after: .seconds(4))])
-    XCTAssertNil(session.listening)
-    XCTAssertEqual(session.presented, .error(message: "Waiting for previous transcripts.", text: ""))
+    _ = makePending(in: &session)
+    let ids = session.pending.map(\.id)
+    XCTAssertEqual(final(&session, id: ids[1], text: "two").last, .insert(generation: 1, text: "two"))
+    XCTAssertEqual(final(&session, id: ids[0], text: "one").last, .insert(generation: 0, text: "one"))
   }
 
-  func testFinalizingTimeoutKeepsPartialTextAndStaleTimeoutIsIgnored() {
+  func testPendingLimitRemainsFourByDefault() {
     var session = readySession()
-    _ = makePending(in: &session, itemID: "item")
-    _ = session.transition(.server(.transcriptDelta(itemID: "item", delta: "partial")))
+    for _ in 0 ..< 4 {
+      _ = makePending(in: &session)
+    }
+    XCTAssertEqual(session.transition(.pressed), [.scheduleDismiss(after: .seconds(4))])
+  }
 
+  func testTimeoutRetiresGenerationAndKeepsPreviewForRecovery() throws {
+    var session = pendingSession()
+    let id = try XCTUnwrap(session.pending.first?.id)
+    _ = session.transition(.engine(.preview(id: id, text: "partial")))
     XCTAssertEqual(
       session.transition(.finalizingTimedOut(generation: 0)),
       [
-        .clearAudio(generation: 0),
+        .cancelTranscription(id: id),
         .discardSnippet(generation: 0),
         .scheduleDismiss(after: .seconds(4)),
       ]
     )
     XCTAssertEqual(session.presented, .timedOut(text: "partial"))
-    XCTAssertEqual(session.transition(.finalizingTimedOut(generation: 0)), [])
+    XCTAssertEqual(final(&session, id: id, text: "late"), [])
   }
 
-  func testBufferCapFinalizesTheListeningSnippet() {
-    var session = readySession()
-    _ = session.transition(.pressed)
+  func testStaleEpochEventsCannotMutateOrInsert() {
+    var session = pendingSession(epoch: .init(9))
+    let stale = TranscriptionInvocationID(epoch: .init(8), generation: 0)
+    XCTAssertEqual(session.transition(.engine(.preview(id: stale, text: "stale"))), [])
+    XCTAssertEqual(final(&session, id: stale, text: "stale"), [])
+    XCTAssertEqual(session.pending.first?.transcript, "")
+  }
 
+  func testTargetedFailureKeepsPreviewAndRetiresOnlyItsGeneration() throws {
+    var session = pendingSession()
+    let id = try XCTUnwrap(session.pending.first?.id)
+    _ = session.transition(.engine(.preview(id: id, text: "recover me")))
     XCTAssertEqual(
-      session.transition(.bufferFull(generation: 0)),
+      session.transition(.engine(.failure(
+        epoch: id.epoch,
+        id: id,
+        failure: .init(kind: .transcription, message: "Rejected", isRecoverable: false)
+      ))),
       [
-        .stopCapture,
-        .commitAudio(generation: 0),
-        .scheduleFinalizingTimeout(generation: 0, after: .seconds(8)),
-      ]
-    )
-  }
-
-  func testCancelWhileListeningStopsClearsAndDiscardsWithoutPresentation() {
-    var session = readySession()
-    _ = session.transition(.pressed)
-
-    XCTAssertEqual(
-      session.transition(.cancelRequested),
-      [.stopCapture, .clearAudio(generation: 0), .discardSnippet(generation: 0)]
-    )
-    XCTAssertNil(session.presentation)
-  }
-
-  func testCancelWithPendingSnippetsDiscardsEverySnippet() {
-    var session = readySession()
-    _ = makePending(in: &session)
-    _ = makePending(in: &session)
-
-    XCTAssertEqual(
-      session.transition(.cancelRequested),
-      [
-        .cancelFinalizingTimeout(generation: 0), .discardSnippet(generation: 0),
-        .cancelFinalizingTimeout(generation: 1), .discardSnippet(generation: 1),
-      ]
-    )
-  }
-
-  func testLocalCaptureErrorCancelsListeningAndDismissesWhenNoTextExists() {
-    var session = readySession()
-    _ = session.transition(.pressed)
-
-    XCTAssertEqual(
-      session.transition(.localError(message: "capture failed")),
-      [
-        .stopCapture,
-        .clearAudio(generation: 0),
+        .cancelFinalizingTimeout(generation: 0),
         .discardSnippet(generation: 0),
         .scheduleDismiss(after: .seconds(4)),
       ]
     )
-    XCTAssertEqual(session.presented, .error(message: "capture failed", text: ""))
+    XCTAssertEqual(session.presented, .error(message: "Rejected", text: "recover me"))
   }
 
-  func testAttemptedInsertionClearsPresentationWithoutLinger() {
-    var session = insertingSession(text: "hello")
-
-    XCTAssertEqual(
-      session.transition(.insertionFinished(generation: 0, outcome: .attempted, reason: nil)),
-      [.discardSnippet(generation: 0), .cancelDismiss]
-    )
-    XCTAssertNil(session.presented)
-    XCTAssertNil(session.presentation)
-  }
-
-  func testRejectedInsertionPresentsReasonAndSchedulesDismiss() {
-    let cases: [(DictationSession.RejectionReason, String)] = [
-      (.noTarget, "No text field is focused"),
-      (.secureField, "Secure field"),
-    ]
-
-    for (reason, message) in cases {
-      var session = insertingSession(text: "hello")
-      XCTAssertEqual(
-        session.transition(
-          .insertionFinished(generation: 0, outcome: .rejected, reason: reason)
-        ),
-        [
-          .discardSnippet(generation: 0),
-          .cancelDismiss,
-          .scheduleDismiss(after: .seconds(4)),
-        ]
-      )
-      XCTAssertEqual(session.presented, .rejected(text: "hello", reason: reason))
-      XCTAssertEqual(session.presentation?.message, message)
-    }
-  }
-
-  func testConfirmedInsertionClearsPresentationWithoutLinger() {
-    var session = insertingSession(text: "hello")
-
-    XCTAssertEqual(
-      session.transition(.insertionFinished(generation: 0, outcome: .confirmed, reason: nil)),
-      [.discardSnippet(generation: 0), .cancelDismiss]
-    )
-    XCTAssertNil(session.presented)
-    XCTAssertNil(session.presentation)
-  }
-
-  func testPasteLastAllocatesGenerationAndInsertsAtCurrentFocus() {
-    var session = readySession()
-
-    XCTAssertEqual(
-      session.transition(.pasteLastRequested(text: "hello")),
-      [.cancelDismiss, .insertAtCurrentFocus(generation: 0, text: "hello")]
-    )
-    XCTAssertEqual(session.inserting, [.init(generation: 0, transcript: "hello")])
-    XCTAssertEqual(session.nextGeneration, 1)
-  }
-
-  func testPasteLastWhileListeningIsIgnored() {
-    var session = readySession()
+  func testEngineReplacementRequiresQuiescenceAndNewerEpoch() {
+    var session = readySession(epoch: .init(3))
     _ = session.transition(.pressed)
-
-    XCTAssertEqual(session.transition(.pasteLastRequested(text: "hello")), [])
-    XCTAssertEqual(session.listening?.generation, 0)
-    XCTAssertTrue(session.inserting.isEmpty)
+    _ = session.transition(.engineReplaced(epoch: .init(4), readiness: .ready))
+    XCTAssertEqual(session.epoch, .init(3))
+    _ = session.transition(.cancelRequested)
+    _ = session.transition(.engineReplaced(epoch: .init(4), readiness: .ready))
+    XCTAssertEqual(session.epoch, .init(4))
   }
 
-  func testStaleInsertionCompletionCannotReplacePresentation() {
-    var session = insertingSession(text: "hello")
+  func testPCMFormatChangesOnlyAtQuiescentBoundary() {
+    var session = readySession()
+    XCTAssertTrue(session.setFormat(.local))
+    let pressEffects = session.transition(.pressed)
+    XCTAssertEqual(session.listening?.id.generation, 0)
+    XCTAssertTrue(pressEffects.contains { effect in
+      guard case .beginTranscription(let invocation) = effect else { return false }
+      return invocation.format == .local
+    })
+    XCTAssertFalse(session.setFormat(.openAI))
+    let effects = session.transition(.released(heldDuration: 1))
+    XCTAssertTrue(effects.contains(.finishTranscription(id: session.pending[0].id)))
+  }
+
+  func testInsertionOutcomeAndPasteLastBehaviorRemainShared() {
+    var session = readySession()
+    _ = session.transition(.pasteLastRequested(text: "hello"))
+    XCTAssertEqual(session.inserting.first?.transcript, "hello")
+    XCTAssertEqual(
+      session.transition(.insertionFinished(generation: 0, outcome: .rejected, reason: .secureField)),
+      [.discardSnippet(generation: 0), .cancelDismiss, .scheduleDismiss(after: .seconds(4))]
+    )
+    XCTAssertEqual(session.presentation?.message, "Secure field")
+  }
+
+  func testCancellationRetiresPendingAndQueuedInsertionsButKeepsStartedInsertion() throws {
+    var session = readySession()
+
+    let startedID = makePending(in: &session)
+    _ = final(&session, id: startedID, text: "already started")
+    _ = session.transition(.insertionStarted(generation: startedID.generation))
+
+    let queuedID = makePending(in: &session)
+    _ = final(&session, id: queuedID, text: "queued")
+    let pendingID = makePending(in: &session)
 
     XCTAssertEqual(
-      session.transition(.insertionFinished(generation: 99, outcome: .confirmed, reason: nil)),
-      []
+      session.transition(.cancelRequested),
+      [
+        .cancelFinalizingTimeout(generation: pendingID.generation),
+        .cancelTranscription(id: pendingID),
+        .discardSnippet(generation: pendingID.generation),
+        .cancelTranscription(id: queuedID),
+        .discardSnippet(generation: queuedID.generation),
+      ]
     )
-    XCTAssertNil(session.presented)
+    XCTAssertTrue(session.pending.isEmpty)
+    XCTAssertEqual(session.inserting.map(\.id), [startedID])
+    XCTAssertTrue(try XCTUnwrap(session.inserting.first).isInsertionStarted)
   }
 
-  func testListeningPresentationShowsQueuedCountAndConnectionMessage() {
+  func testInsertionStartedIgnoresMissingOrRepeatedGeneration() throws {
     var session = readySession()
-    _ = makePending(in: &session)
-    _ = session.transition(.pressed)
+    let id = makePending(in: &session)
+    _ = final(&session, id: id, text: "queued")
 
-    XCTAssertEqual(session.presentation?.pendingCount, 1)
-    XCTAssertEqual(session.presentation?.message, "")
-    _ = session.transition(.connectionLost(message: "lost"))
-    XCTAssertEqual(session.presentation?.message, "Reconnecting…")
+    XCTAssertEqual(session.transition(.insertionStarted(generation: 99)), [])
+    XCTAssertFalse(try XCTUnwrap(session.inserting.first).isInsertionStarted)
+    XCTAssertEqual(session.transition(.insertionStarted(generation: id.generation)), [])
+    XCTAssertTrue(try XCTUnwrap(session.inserting.first).isInsertionStarted)
+    XCTAssertEqual(session.transition(.insertionStarted(generation: id.generation)), [])
   }
 }
 
 private extension DictationSessionTests {
   func readySession(
-    configuration: DictationSession.Configuration = .init()
+    configuration: DictationSession.Configuration = .init(),
+    epoch: TranscriptionBackendEpoch = .init(7)
   ) -> DictationSession {
-    var session = DictationSession(configuration: configuration, hasKey: true)
-    _ = session.transition(.connectRequested(force: false))
-    _ = session.transition(.sessionReady)
+    DictationSession(configuration: configuration, epoch: epoch, readiness: .ready)
+  }
+
+  func pendingSession(epoch: TranscriptionBackendEpoch = .init(7)) -> DictationSession {
+    var session = readySession(epoch: epoch)
+    _ = makePending(in: &session)
     return session
   }
 
   @discardableResult
-  func makePending(
-    in session: inout DictationSession,
-    itemID: String? = nil
-  ) -> Int {
-    let generation = session.nextGeneration
+  func makePending(in session: inout DictationSession) -> TranscriptionInvocationID {
     _ = session.transition(.pressed)
+    let id = try! XCTUnwrap(session.listening?.id)
     _ = session.transition(.released(heldDuration: 1))
-    if let itemID {
-      _ = session.transition(.server(.inputCommitted(itemID: itemID)))
-    }
-    return generation
+    return id
   }
 
-  func insertingSession(text: String) -> DictationSession {
-    var session = readySession()
-    _ = makePending(in: &session, itemID: "item")
-    _ = session.transition(.server(.transcriptCompleted(itemID: "item", transcript: text)))
-    return session
+  func final(
+    _ session: inout DictationSession,
+    id: TranscriptionInvocationID,
+    text: String
+  ) -> [DictationSession.Effect] {
+    session.transition(.engine(.final(
+      id: id,
+      result: .init(text: text, correction: .disabled)
+    )))
   }
 }
 
-extension DictationSessionTests {
-  func testDeltasWhileListeningPreviewLiveAndCarryTheItemIntoPending() {
-    var session = readySession()
-    _ = session.transition(.pressed)
-
-    XCTAssertEqual(
-      session.transition(.server(.transcriptDelta(itemID: "live", delta: "Ship the "))),
-      []
-    )
-    XCTAssertEqual(session.listening?.transcript, "Ship the ")
-    XCTAssertEqual(session.presentation?.transcript, "Ship the ")
-
-    _ = session.transition(.server(.transcriptDelta(itemID: "other", delta: "noise")))
-    XCTAssertEqual(session.listening?.transcript, "Ship the ")
-
-    _ = session.transition(.released(heldDuration: 1))
-    XCTAssertEqual(session.pending.first?.itemID, "live")
-    _ = session.transition(.server(.inputCommitted(itemID: "live")))
-    _ = session.transition(.server(.transcriptDelta(itemID: "live", delta: "release")))
-    XCTAssertEqual(session.pending.first?.transcript, "Ship the release")
-    XCTAssertEqual(
-      session.transition(.server(.transcriptCompleted(itemID: "live", transcript: "Ship the release."))).last,
-      .insert(generation: 0, text: "Ship the release.")
-    )
-  }
-
-  func testConnectionLossWhileListeningResetsTheLiveItemAndPartialText() {
-    var session = readySession()
-    _ = session.transition(.pressed)
-    _ = session.transition(.server(.transcriptDelta(itemID: "live", delta: "hello")))
-
-    _ = session.transition(.connectionLost(message: "lost"))
-    XCTAssertNil(session.listening?.itemID)
-    XCTAssertEqual(session.listening?.transcript, "")
-
-    _ = session.transition(.reconnectDelayElapsed(attempt: 1))
-    _ = session.transition(.sessionReady)
-    _ = session.transition(.server(.transcriptDelta(itemID: "replayed", delta: "hello again")))
-    XCTAssertEqual(session.listening?.itemID, "replayed")
-    XCTAssertEqual(session.listening?.transcript, "hello again")
-  }
-}
+// swiftlint:enable force_try identifier_name

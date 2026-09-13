@@ -30,4 +30,61 @@ final class RealtimeAttemptTests: XCTestCase {
     XCTAssertEqual(event?.belongsTo(nil), false)
     XCTAssertEqual(event?.belongsTo("old"), true)
   }
+
+  func testPreviewBurstCannotEvictControlOrTerminalEvents() async {
+    let client = RealtimeTranscriptionClient()
+    await client.beginAttempt("burst")
+    _ = await client.receive(.sessionReady, attemptID: "burst")
+    for index in 0 ..< 150 {
+      _ = await client.receive(
+        .transcriptDelta(itemID: "item", delta: "\(index)"),
+        attemptID: "burst"
+      )
+    }
+    _ = await client.receive(.inputCommitted(itemID: "item"), attemptID: "burst")
+    _ = await client.receive(
+      .transcriptCompleted(itemID: "item", transcript: "complete"),
+      attemptID: "burst"
+    )
+
+    let received = await collect(153, from: client.events)
+    XCTAssertEqual(received?.first, .init(attemptID: "burst", payload: .server(.sessionReady)))
+    XCTAssertEqual(
+      received?.suffix(2),
+      [
+        .init(attemptID: "burst", payload: .server(.inputCommitted(itemID: "item"))),
+        .init(
+          attemptID: "burst",
+          payload: .server(.transcriptCompleted(itemID: "item", transcript: "complete"))
+        ),
+      ]
+    )
+  }
+
+  private func collect(
+    _ count: Int,
+    from events: AsyncStream<RealtimeTransportEvent>
+  ) async -> [RealtimeTransportEvent]? {
+    await withTaskGroup(of: [RealtimeTransportEvent]?.self) { group in
+      group.addTask {
+        var iterator = events.makeAsyncIterator()
+        var received: [RealtimeTransportEvent] = []
+        for _ in 0 ..< count {
+          guard let event = await iterator.next() else { return nil }
+          received.append(event)
+        }
+        return received
+      }
+      group.addTask {
+        try? await Task.sleep(for: .seconds(1))
+        return nil
+      }
+      guard let result = await group.next() else {
+        group.cancelAll()
+        return nil
+      }
+      group.cancelAll()
+      return result
+    }
+  }
 }

@@ -26,7 +26,8 @@ the live API, [assumed] not yet confirmed either way.
   it.
 - [assumed] Realtime sessions have a finite maximum lifetime and drop on
   idle. Treat every socket as one that will close, and reconnect with
-  backoff. `DictationSession` owns that policy.
+  backoff. The OpenAI backend owns that provider-specific policy and replay;
+  the generic dictation reducer only observes readiness and transcript events.
 
 ## Session configuration
 
@@ -96,8 +97,8 @@ the live API, [assumed] not yet confirmed either way.
 - [observed] With `turn_detection: null`, deltas stream while audio is still
   being appended, before any commit. The `item_id` on those live deltas is
   the same id later reported by `input_audio_buffer.committed` for that
-  turn. The live preview depends on this: the listening snippet adopts the
-  first delta's `item_id`. Do not assume deltas start at commit.
+  turn. The live preview depends on this: the OpenAI adapter associates the
+  first delta's `item_id` with its active invocation. Do not assume deltas start at commit.
 - [docs] `conversation.item.input_audio_transcription.completed` carries the
   final `transcript` for an `item_id`. The app inserts only this text, never
   partials.
@@ -114,3 +115,13 @@ the live API, [assumed] not yet confirmed either way.
 - Exact session lifetime and idle limits for transcription intent.
 - Whether `keywords` has a documented maximum count or length beyond the
   app's own 80-character entry cap.
+
+## Application boundary
+
+`OpenAITranscriptionBackend` owns transport attempts, item IDs, pre-commit
+previews, commit rejection correlation, cancelled ACK tombstones, and replay.
+It emits full preview replacements and final results addressed by backend epoch
+and invocation generation. `DictationSession` handles those common events and
+owns gestures, timeouts, pending work, and insertion decisions for both engines.
+Cloud configuration accepts only `RealtimeSessionConfiguration`; local
+vocabulary and ephemeral context are separate types and persistence keys.

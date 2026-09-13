@@ -3,12 +3,13 @@ import HubrisVoiceCore
 import SwiftUI
 
 enum SettingsTab: String, CaseIterable {
-  case general, dictation, dictionary, shortcuts, permissions, history, advanced
+  case general, dictation, models, dictionary, shortcuts, permissions, history, advanced
 
   var title: String {
     switch self {
     case .general: "General"
     case .dictation: "Dictation"
+    case .models: "Models"
     case .dictionary: "Dictionary"
     case .shortcuts: "Shortcuts"
     case .permissions: "Permissions"
@@ -21,6 +22,7 @@ enum SettingsTab: String, CaseIterable {
     switch self {
     case .general: "gearshape"
     case .dictation: "waveform"
+    case .models: "externaldrive"
     case .dictionary: "character.book.closed"
     case .shortcuts: "keyboard"
     case .permissions: "checkmark.shield"
@@ -52,6 +54,7 @@ struct SettingsView: View {
     switch tab {
     case .general: GeneralSettingsTab(model: model)
     case .dictation: DictationSettingsTab(model: model)
+    case .models: ModelsSettingsTab(models: model.localModels)
     case .dictionary: DictionarySettingsTab(model: model)
     case .shortcuts: ShortcutsSettingsTab(model: model)
     case .permissions: PermissionsSettingsTab(model: model)

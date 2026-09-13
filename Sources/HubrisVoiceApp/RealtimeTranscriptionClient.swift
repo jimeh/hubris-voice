@@ -167,31 +167,37 @@ final class RealtimeOutboundPipe: @unchecked Sendable {
     self.attemptID = attemptID
   }
 
-  private func enqueue(_ payload: RealtimeOutboundAction.Payload) {
+  private func enqueue(_ payload: RealtimeOutboundAction.Payload) -> Bool {
     lock.lock()
     defer { lock.unlock() }
-    continuation.yield(RealtimeOutboundAction(attemptID: attemptID, payload: payload))
+    switch continuation.yield(RealtimeOutboundAction(attemptID: attemptID, payload: payload)) {
+    case .enqueued:
+      return true
+    case .dropped, .terminated:
+      return false
+    @unknown default:
+      return false
+    }
   }
 
-  func appendAudio(_ data: Data) {
+  func appendAudio(_ data: Data) -> Bool {
     enqueue(.append(data))
   }
 
-  @discardableResult
-  func commitAudio() -> String {
+  func commitAudio() -> String? {
     let eventID = UUID().uuidString
-    enqueue(.commit(eventID))
-    return eventID
+    return enqueue(.commit(eventID)) ? eventID : nil
   }
 
-  func clearAudio() {
+  func clearAudio() -> Bool {
     enqueue(.clear)
   }
 
-  func replay(_ chunks: [Data]) {
+  func replay(_ chunks: [Data]) -> Bool {
     for chunk in chunks {
-      enqueue(.append(chunk))
+      guard enqueue(.append(chunk)) else { return false }
     }
+    return true
   }
 }
 
@@ -226,26 +232,28 @@ actor RealtimeTranscriptionClient {
   private var isReady = false
   private var activeAttemptID: String?
   private var didLogDroppedOutbound = false
+  private let consumesOutboundActions: Bool
 
-  init() {
+  init(outboundCapacity: Int = 512, consumesOutboundActions: Bool = true) {
+    self.consumesOutboundActions = consumesOutboundActions
     let outboundPair = AsyncStream.makeStream(
       of: RealtimeOutboundAction.self,
-      bufferingPolicy: .unbounded
+      bufferingPolicy: .bufferingOldest(outboundCapacity)
     )
     outbound = RealtimeOutboundPipe(
       continuation: outboundPair.continuation
     )
     outboundStream = outboundPair.stream
 
-    let eventPair = AsyncStream.makeStream(
-      of: RealtimeTransportEvent.self,
-      bufferingPolicy: .bufferingNewest(100)
-    )
+    // This stream carries text and control events, not audio. Keep it lossless:
+    // dropping an ACK, error, or final would strand an invocation.
+    let eventPair = AsyncStream.makeStream(of: RealtimeTransportEvent.self)
     events = eventPair.stream
     eventContinuation = eventPair.continuation
   }
 
   func start() {
+    guard consumesOutboundActions else { return }
     guard outboundTask == nil else {
       return
     }
