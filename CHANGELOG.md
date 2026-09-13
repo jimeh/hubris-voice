@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/jimeh/hubris-voice/compare/v0.1.0...v0.1.1) (2026-09-13)
+
+
+### Bug Fixes
+
+* **build:** release build and move release automation to SwiftPM ([#6](https://github.com/jimeh/hubris-voice/issues/6)) ([b722108](https://github.com/jimeh/hubris-voice/commit/b7221084fda920d64e41b9618daa11bc8aaa547c))
+
 ## 0.1.0 (2026-09-13)
 
 
