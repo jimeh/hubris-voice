@@ -39,6 +39,20 @@ struct GeneralSettingsTab: View {
           .labelsHidden()
           .frame(width: 170)
         }
+        SettingsRow(title: "Dictation enabled", caption: "Also available from the menu bar.") {
+          Toggle("Dictation enabled", isOn: $model.dictationEnabled).labelsHidden()
+        }
+      }
+      Section("Sounds") {
+        SettingsRow(title: "Start and stop") {
+          Toggle("Start and stop", isOn: $model.startStopSoundsEnabled).labelsHidden()
+        }
+        SettingsRow(title: "Pasted") {
+          Toggle("Pasted", isOn: $model.pastedSoundEnabled).labelsHidden()
+        }
+        SettingsRow(title: "Rejected or failed") {
+          Toggle("Rejected or failed", isOn: $model.rejectedSoundEnabled).labelsHidden()
+        }
       }
     }
     .formStyle(.grouped)
@@ -384,19 +398,97 @@ struct PermissionsSettingsTab: View {
 }
 
 struct HistorySettingsTab: View {
-  private let historyPlaceholder =
-    "Transcript history arrives with a later milestone. "
-      + "Until then, a rejected transcript stays in the overlay until you copy or dismiss it."
+  @ObservedObject var model: AppModel
+  @State private var query = ""
 
   var body: some View {
     Form {
       Section {
-        Text(historyPlaceholder)
-          .font(.caption)
-          .foregroundStyle(.secondary)
+        HStack {
+          TextField("Search history", text: $query)
+            .textFieldStyle(.roundedBorder)
+          Button("Clear") { model.clearHistory() }
+            .disabled(model.history.entries.isEmpty)
+        }
+      }
+      Section {
+        if entries.isEmpty {
+          Text(model.history.entries.isEmpty ? "No transcripts yet." : "No matches.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        ForEach(entries) { entry in
+          HistoryRow(entry: entry, model: model)
+        }
+      }
+      Section {
+        SettingsRow(
+          title: "Keep history across launches",
+          caption: "Off by default. Transcripts can contain sensitive text. "
+            + "Stored at \(TranscriptHistoryStore.displayPath)."
+        ) {
+          Toggle("Keep history across launches", isOn: $model.historyPersistenceEnabled).labelsHidden()
+        }
       }
     }
     .formStyle(.grouped)
+  }
+
+  private var entries: [TranscriptEntry] {
+    let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? model.history.entries : model.history.search(trimmed)
+  }
+}
+
+private struct HistoryRow: View {
+  let entry: TranscriptEntry
+  @ObservedObject var model: AppModel
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 12) {
+      VStack(alignment: .leading, spacing: 3) {
+        Text(entry.text)
+          .font(.system(.body, design: .rounded))
+          .lineLimit(3)
+        Text(meta)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      Spacer(minLength: 8)
+      Button("Copy") { model.copyTranscript(entry) }
+      Button {
+        model.removeHistoryEntry(id: entry.id)
+      } label: {
+        Image(systemName: "trash")
+      }
+      .accessibilityLabel("Remove transcript")
+    }
+    .padding(.vertical, 2)
+  }
+
+  private var meta: String {
+    [appName, entry.outcome.label, entry.recordedAt.formatted(date: .omitted, time: .shortened)]
+      .compactMap(\.self)
+      .joined(separator: " · ")
+  }
+
+  private var appName: String? {
+    guard let bundleID = entry.targetBundleID else { return nil }
+    let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+    return url.map { FileManager.default.displayName(atPath: $0.path) } ?? bundleID
+  }
+}
+
+extension TranscriptEntry.Outcome {
+  var label: String {
+    switch self {
+    case .pasted: "Pasted"
+    case .attempted: "Attempted"
+    case .rejected: "Rejected"
+    case .timedOut: "Timed out"
+    case .copied: "Copied"
+    case .cancelled: "Cancelled"
+    }
   }
 }
 

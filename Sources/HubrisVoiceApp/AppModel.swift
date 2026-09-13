@@ -181,6 +181,9 @@ final class AppModel: ObservableObject {
   }
 
   var menuSystemImage: String {
+    if !dictationEnabled {
+      return "waveform.slash"
+    }
     if lastAttentionAt != nil {
       return "exclamationmark.circle"
     }

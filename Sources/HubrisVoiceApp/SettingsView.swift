@@ -55,7 +55,7 @@ struct SettingsView: View {
     case .dictionary: DictionarySettingsTab(model: model)
     case .shortcuts: ShortcutsSettingsTab(model: model)
     case .permissions: PermissionsSettingsTab(model: model)
-    case .history: HistorySettingsTab()
+    case .history: HistorySettingsTab(model: model)
     case .advanced: AdvancedSettingsTab(model: model)
     }
   }
@@ -109,22 +109,5 @@ struct StatusBadge: View {
     case .attention: .voiceCoral
     case .neutral: .secondary
     }
-  }
-}
-
-struct MenuBarContent: View {
-  @ObservedObject var model: AppModel
-
-  var body: some View {
-    Text(model.phaseTitle)
-    Divider()
-    SettingsLink {
-      Label("Settings…", systemImage: "gearshape")
-    }
-    Divider()
-    Button("Quit Hubris Voice") {
-      NSApplication.shared.terminate(nil)
-    }
-    .keyboardShortcut("q")
   }
 }
