@@ -371,6 +371,7 @@ test("index guard rejects vendor-only worktree and untracked drift", () => {
   const root = temporary();
   put(join(root, "Vendor/FluidAudio/source.swift"), "original\n");
   put(join(root, "unrelated.txt"), "original\n");
+  put(join(root, ".gitignore"), "*.generated\n.build/\n");
   const command = (
     cwd: string,
     args: string[],
@@ -458,6 +459,19 @@ test("index guard rejects vendor-only worktree and untracked drift", () => {
       null,
     ),
   ).toThrow("third-party/vendor/new.patch");
+  rmSync(join(root, "third-party/vendor/new.patch"));
+  put(join(root, "Vendor/FluidAudio/source.swift"), "staged\n");
+  put(join(root, "Vendor/FluidAudio/ignored.generated"), "ignored source\n");
+  expect(() =>
+    assertVendorIndexMatchesWorktree(
+      root,
+      ["Vendor", "third-party/vendor"],
+      null,
+    ),
+  ).toThrow("Vendor/FluidAudio/ignored.generated");
+  rmSync(join(root, "Vendor/FluidAudio/ignored.generated"));
+  put(join(root, "Vendor/FluidAudio/.build/ignored.generated"), "build output\n");
+  assertVendorIndexMatchesWorktree(root, ["Vendor", "third-party/vendor"], null);
   expect(command(parent, ["rev-parse", "HEAD"])).toBe(parentHead);
   expect(readFileSync(join(parent, ".git/index"))).toEqual(parentIndex);
 });
@@ -528,12 +542,33 @@ sessionTest("overlapping edits and later replay conflicts can be resumed without
   // A syntactically resolved merge that drops the tested fix must not publish.
   put(join(f.work, "build.rs"), "last patch\n");
   git(f.repo, ["add", "tree/build.rs"]);
-  await expect(action(f, "continue")).rejects.toThrow("replayed stack differs from the tested vendor tree");
+  const finalMismatch = action(f, "continue");
+  await expect(finalMismatch).rejects.toThrow("replayed stack differs from the tested vendor tree");
+  await expect(finalMismatch).rejects.toThrow("last patch, last");
+  await expect(finalMismatch).rejects.toThrow("target patch, target");
+  await expect(finalMismatch).rejects.toThrow("vendor:reopen");
   expect(contents(f)).toEqual(patches);
   put(join(f.work, "build.rs"), "tested fix\n");
   await action(f, "continue");
   expect(treeEntries(f.vendor)).toEqual(desired);
   await reproduce(f.source, f.root, f.archive);
+});
+
+sessionTest("conflict continuation lists edits made after staging a resolution", async () => {
+  const f = await series(true);
+  await action(f, "start");
+  put(join(f.vendor, "build.rs"), "tested fix\n");
+  await expect(action(f, "finish")).rejects.toThrow("Resolve target");
+  const { git } = await import("./vendor");
+  put(join(f.work, "build.rs"), "staged resolution\n");
+  git(f.repo, ["add", "tree/build.rs"]);
+  put(join(f.work, "build.rs"), "further unstaged edit\n");
+  const continuation = action(f, "continue");
+  await expect(continuation).rejects.toThrow(
+    "Replay conflict resolution has unstaged changes",
+  );
+  await expect(continuation).rejects.toThrow("tree/build.rs");
+  await expect(continuation).rejects.toThrow("Stage the intended files");
 });
 
 sessionTest("start rejects existing drift and an existing session", async () => {
@@ -630,14 +665,25 @@ sessionTest("explicit adoption assigns existing edits to the selected patch", as
 
 sessionTest("private Git snapshots preserve ignored files and attribute-sensitive bytes", async () => {
   const f = await series(false, {
-    ".gitignore": "ignored.txt\n",
-    ".gitattributes": "*.txt text eol=crlf export-ignore\n",
-    "ignored.txt": "literal\r\nbytes\r\n",
+    "Sources/.gitignore": "ignored.txt\n",
+    "Sources/.gitattributes": "*.txt text eol=crlf export-ignore\n",
+    "Sources/ignored.txt": "literal\r\nbytes\r\n",
   });
+  expect(readFileSync(join(f.vendor, "Sources/.gitignore"), "utf8")).toBe(
+    "ignored.txt\n",
+  );
+  expect(readFileSync(join(f.vendor, "Sources/.gitattributes"), "utf8")).toBe(
+    "*.txt text eol=crlf export-ignore\n",
+  );
+  expect(readFileSync(join(f.vendor, "Sources/ignored.txt"), "utf8")).toBe(
+    "literal\r\nbytes\r\n",
+  );
   await action(f, "start");
-  put(join(f.vendor, "ignored.txt"), "updated\r\nbytes\r\n");
+  put(join(f.vendor, "Sources/ignored.txt"), "updated\r\nbytes\r\n");
   await action(f, "finish");
-  expect(readFileSync(join(f.vendor, "ignored.txt"), "utf8")).toBe("updated\r\nbytes\r\n");
+  expect(readFileSync(join(f.vendor, "Sources/ignored.txt"), "utf8")).toBe(
+    "updated\r\nbytes\r\n",
+  );
   await reproduce(f.source, f.root, f.archive);
 });
 

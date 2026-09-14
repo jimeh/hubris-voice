@@ -129,7 +129,11 @@ function verifyDesired(session: string, state: State, root: string) {
   const sourceChanged = differences(desired, sourceEntries(state.source, sourceDirectory(root, state.source)));
   if (sourceChanged.length) throw new Error(`vendored source changed after finish began: ${sourceChanged.join(", ")}; run vendor:reopen to include further edits, then finish again`);
   const mismatch = differences(desired, treeEntries(work(session)));
-  if (mismatch.length) throw new Error(`replayed stack differs from the tested vendor tree: ${mismatch.join(", ")}\nCorrect the current patch in ${work(session)}, then run vendor:continue. The vendored source is unchanged.`);
+  if (mismatch.length) {
+    const last = state.source.patches.at(-1)!.name;
+    const target = state.source.patches[state.target]!.name;
+    throw new Error(`replayed stack differs from the tested vendor tree: ${mismatch.join(", ")}\nCorrections made in ${work(session)} and followed by vendor:continue are recorded in the last patch, ${last}. If the correction belongs in the target patch, ${target}, or another earlier patch, run vendor:reopen, reconcile the vendored source, and finish again. The vendored source is unchanged.`);
+  }
 }
 
 function patchBetween(session: string, before: string, after: string): string {
@@ -146,7 +150,13 @@ async function drive(session: string, state: State, source: Source, root: string
       if (current === state.head) {
         if (existsSync(join(session, "repo/.git/CHERRY_PICK_HEAD"))) {
           if (sg(session, ["diff", "--name-only", "--diff-filter=U"])) conflict(session, state);
-          sg(session, ["diff", "--exit-code"]);
+          const unstaged = [
+            ...sg(session, ["diff", "--name-only", "--", "tree"]).split("\n"),
+            ...sg(session, ["ls-files", "--others", "--exclude-standard", "--", "tree"]).split("\n"),
+          ].filter(Boolean);
+          if (unstaged.length) {
+            throw new Error(`Replay conflict resolution has unstaged changes:\n${[...new Set(unstaged)].sort().map((file) => `  ${file}`).join("\n")}\nStage the intended files, or discard those further edits, then run vendor:continue again.`);
+          }
           sg(session, ["commit", "--quiet", "--allow-empty", "-m", `Resolve ${source.patches[state.target + state.next]!.name}`]);
         } else {
           if (sg(session, ["status", "--porcelain"])) throw new Error("unexpected edits in the replay workspace; preserve them before continuing");

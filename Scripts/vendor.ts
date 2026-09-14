@@ -328,8 +328,8 @@ export function assertVendorIndexMatchesWorktree(
   gitIndexFile: string | null | undefined = process.env.GIT_INDEX_FILE,
 ): void {
   const env = isolatedGitEnvironment(cwd, process.env, gitIndexFile);
-  const run = (args: string[]) => {
-    const result = Bun.spawnSync(["git", ...args, "--", ...inputs], {
+  const run = (args: string[], paths = inputs) => {
+    const result = Bun.spawnSync(["git", ...args, "--", ...paths], {
       cwd,
       env,
       stdout: "pipe",
@@ -344,7 +344,29 @@ export function assertVendorIndexMatchesWorktree(
   };
   const changed = run(["diff", "--name-only"]);
   const untracked = run(["ls-files", "--others", "--exclude-standard"]);
-  const mismatches = [changed, untracked].filter(Boolean).join("\n");
+  const ignored = run([
+    "ls-files",
+    "--others",
+    "--ignored",
+    "--exclude-standard",
+    "--directory",
+    "--no-empty-directory",
+  ])
+    .split("\n")
+    .filter(
+      (file) =>
+        file &&
+        file !== "Vendor/FluidAudio/.build" &&
+        !file.startsWith("Vendor/FluidAudio/.build/"),
+    )
+    .join("\n");
+  const mismatches = [...new Set(
+    [changed, untracked, ignored].flatMap((files) =>
+      files ? files.split("\n") : [],
+    ),
+  )]
+    .sort()
+    .join("\n");
   if (mismatches) {
     throw new Error(
       `vendor-related index and working tree differ:\n${mismatches
