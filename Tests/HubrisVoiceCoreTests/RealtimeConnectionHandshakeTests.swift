@@ -12,7 +12,10 @@ final class RealtimeConnectionHandshakeTests: XCTestCase {
     }
 
     let didStartWaiting = await waitUntilWaiting(handshake)
-    XCTAssertTrue(didStartWaiting)
+    XCTAssertTrue(
+      didStartWaiting,
+      "waitForOpen never registered its waiter within the 1 s poll bound"
+    )
     let completedBeforeOpen = await probe.isCompleted
     XCTAssertFalse(completedBeforeOpen)
 

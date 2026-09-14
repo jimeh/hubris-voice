@@ -310,12 +310,18 @@ private struct Fixture {
 }
 
 private actor FixtureDownloader: LocalModelDownloading {
+  private struct SuspensionWaiter {
+    let continuation: CheckedContinuation<Bool, Never>
+    let timeoutTask: Task<Void, Never>
+  }
+
   var corruptSecond: Bool
   var suspendAt: String?
   var counts: [String: Int] = [:]
   var expectedByteCounts: [String: [Int64]] = [:]
   private var suspendedNames: Set<String> = []
   private var suspensionContinuations: [String: CheckedContinuation<Void, any Error>] = [:]
+  private var suspensionWaiters: [String: SuspensionWaiter] = [:]
 
   init(root _: URL, corruptSecond: Bool = false, suspendAt: String? = nil) {
     self.corruptSecond = corruptSecond
@@ -331,12 +337,23 @@ private actor FixtureDownloader: LocalModelDownloading {
   }
 
   func waitUntilSuspended(_ name: String, timeout: Duration = .seconds(1)) async -> Bool {
-    let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: timeout)
-    while !suspendedNames.contains(name), clock.now < deadline {
-      await Task.yield()
+    if suspendedNames.contains(name) {
+      return true
     }
-    return suspendedNames.contains(name)
+    return await withCheckedContinuation { continuation in
+      let timeoutTask = Task { [weak self] in
+        do {
+          try await Task.sleep(for: timeout)
+        } catch {
+          return
+        }
+        await self?.finishSuspensionWaiter(name, result: false)
+      }
+      suspensionWaiters[name] = SuspensionWaiter(
+        continuation: continuation,
+        timeoutTask: timeoutTask
+      )
+    }
   }
 
   func download(
@@ -355,6 +372,7 @@ private actor FixtureDownloader: LocalModelDownloading {
         try await withCheckedThrowingContinuation { continuation in
           suspendedNames.insert(name)
           suspensionContinuations[name] = continuation
+          finishSuspensionWaiter(name, result: true)
         }
       } onCancel: {
         Task { await self.cancelSuspension(name) }
@@ -370,6 +388,14 @@ private actor FixtureDownloader: LocalModelDownloading {
     suspensionContinuations.removeValue(forKey: name)?.resume(
       throwing: CancellationError()
     )
+  }
+
+  private func finishSuspensionWaiter(_ name: String, result: Bool) {
+    guard let waiter = suspensionWaiters.removeValue(forKey: name) else {
+      return
+    }
+    waiter.timeoutTask.cancel()
+    waiter.continuation.resume(returning: result)
   }
 }
 
