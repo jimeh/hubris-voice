@@ -52,4 +52,4 @@ while read -r _ file_name; do
   fi
 done <"${integrity_file}"
 
-print -- "Vendored FluidAudio 0.15.7 source and privacy patch verified"
+print -- "Vendored FluidAudio 0.15.7 source and Hubris patch verified"

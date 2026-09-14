@@ -60,7 +60,9 @@ with audio context on either side.
 
 FluidAudio's original logger contains transcript and vocabulary interpolation.
 The vendored logger has no output sink in either debug or release builds.
-`mise run lint:vendor` verifies the exact upstream snapshot and patch. Hubris
+`mise run lint:vendor` verifies the exact upstream snapshot and patch, including
+the documented compiler-compatibility fixes. The commit hook verifies vendor
+integrity instead of formatting third-party sources. Hubris
 Voice's optional raw development trace is also suppressed while local mode is
 selected. Normal diagnostics contain no local vocabulary or transcript text.
 
@@ -115,14 +117,15 @@ microphone-to-screen latency or cold-start guarantees. Both paths produced text;
 the strict candidate contained complete expected dictionary terms. Sentinel
 checks found no private test term in application diagnostics.
 
-The final `mise run verify` passed: 138 Core tests and 54 app tests were
-collected, with 189 passing and the three opt-in smokes skipped in the default
+The final `mise run verify` passed: 138 Core tests and 56 app tests were
+collected, with 191 passing and the three opt-in smokes skipped in the default
 suite. The download, network-denied runtime, and native rendering smokes also
 passed separately. The signed release bundle passed strict deep verification.
 
 This development machine has Xcode 27. Older Xcode 16.0/26.3 CI configurations
 remain in the workflow, but have not been executed locally. There has been no
-live OpenAI smoke during this implementation.
+live OpenAI smoke during this implementation. Jim has reported successful local
+dictation, live previews, model downloads, and correction in manual use.
 
 Jim must verify microphone permissions, physical input/device changes,
 sleep/wake, global shortcut timing, and final-text insertion in real applications.

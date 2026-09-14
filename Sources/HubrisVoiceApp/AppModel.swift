@@ -246,7 +246,7 @@ final class AppModel: ObservableObject {
   private let keychain = KeychainStore()
   private let loginItemService = LoginItemService()
   private let updater = NativeUpdater()
-  private let defaults: UserDefaults
+  private let settingsStore: UserDefaultsSettingsStore
   private let dismissScheduler = DelayedActionScheduler()
   private let configurationScheduler = DelayedActionScheduler()
   private let historyPersistenceScheduler = DelayedActionScheduler()
@@ -286,13 +286,14 @@ final class AppModel: ObservableObject {
 
   // swiftlint:disable:next function_body_length
   init(defaults: UserDefaults = .standard) {
-    self.defaults = defaults
-    localModels = LocalModelsController(settings: defaults)
+    let settingsStore = UserDefaultsSettingsStore(defaults)
+    self.settingsStore = settingsStore
+    localModels = LocalModelsController(settings: settingsStore)
     let historyStore = TranscriptHistoryStore()
     self.historyStore = historyStore
     let storedAPIKey = localModels.engine == .openAI ? (try? keychain.readAPIKey()) ?? "" : ""
     let loginItemStatus = LoginItemService().status
-    var settings = DictationSettings.load(from: defaults)
+    var settings = DictationSettings.load(from: settingsStore)
     if loginItemStatus == .enabled {
       settings.launchAtLogin = true
     }
@@ -353,7 +354,7 @@ final class AppModel: ObservableObject {
         : .preparing(message: "Connecting…")
     )
     phaseTitle = session.phaseTitle
-    settings.save(to: defaults)
+    settings.save(to: settingsStore)
     audioCapture.preferredDeviceUID = settings.inputDeviceUID
 
     audioCapture.onChunk = { [weak self] data in
@@ -589,7 +590,7 @@ final class AppModel: ObservableObject {
   ) {
     let oldSettings = settings
     update(&settings)
-    settings.save(to: defaults)
+    settings.save(to: settingsStore)
     guard activeEngine == .openAI else {
       configurationState = .applied
       return
@@ -1294,28 +1295,6 @@ private extension ShortcutSet {
       return true
     }
     return pasteLastTranscript == .modifier(.fn)
-  }
-}
-
-extension UserDefaults: @unchecked Sendable, SettingsStore {
-  public func string(_ key: String) -> String? {
-    string(forKey: key)
-  }
-
-  public func stringArray(_ key: String) -> [String]? {
-    stringArray(forKey: key)
-  }
-
-  public func bool(_ key: String) -> Bool? {
-    object(forKey: key) as? Bool
-  }
-
-  public func integer(_ key: String) -> Int? {
-    object(forKey: key) as? Int
-  }
-
-  public func set(_ value: Any?, for key: String) {
-    set(value, forKey: key)
   }
 }
 

@@ -308,7 +308,7 @@ extension StreamingNemotronMultilingualAsrManager {
         if smartSpecEnabled,
             let jointBatched = self.jointNoEncProjBatched,
             let decoder = self.decoder,
-            let encProjResolved: MLMultiArray = try await {
+            let encProjResolved: MLMultiArray = {
                 if let direct = encoderProj { return direct }
                 return nil
             }()

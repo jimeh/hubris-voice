@@ -3,8 +3,15 @@ pre-commit:
   jobs:
     - name: swift
       glob: "*.swift"
+      exclude:
+        - "Vendor/**"
+        - "Experiments/**"
       run: mise exec -- swiftformat {staged_files} && mise exec -- swiftlint lint --strict {staged_files}
       stage_fixed: true
+
+    - name: vendor-integrity
+      glob: "Vendor/**"
+      run: mise run lint:vendor
 
     - name: zsh
       glob: "*.sh"

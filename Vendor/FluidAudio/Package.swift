@@ -28,6 +28,9 @@ let package = Package(
             resources: [
                 // Keep .process: .copy of a Resources-named directory breaks Apple code signing on iOS.
                 .process("TTS/LuxTts/G2p/Resources")
+            ],
+            swiftSettings: [
+                .unsafeFlags(["-Xcc", "-DACCELERATE_NEW_LAPACK"])
             ]
         ),
         // Byte-exact NeMo text normalization (FST engine, all 7 languages).

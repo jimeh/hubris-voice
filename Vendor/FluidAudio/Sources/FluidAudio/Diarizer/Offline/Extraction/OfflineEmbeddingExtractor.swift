@@ -773,10 +773,8 @@ struct OfflineEmbeddingExtractor {
         }
 
         let options = MLPredictionOptions()
-        if #available(macOS 14.0, iOS 17.0, *) {
-            for array in audioArrays {
-                array.prefetchToNeuralEngine()
-            }
+        for array in audioArrays {
+            array.prefetchToNeuralEngine()
         }
 
         let batchProvider = MLArrayBatchProvider(array: providers)
@@ -880,10 +878,8 @@ struct OfflineEmbeddingExtractor {
             ]
         )
         let options = MLPredictionOptions()
-        if #available(macOS 14.0, iOS 17.0, *) {
-            fbankFeatures.prefetchToNeuralEngine()
-            weightsArray.prefetchToNeuralEngine()
-        }
+        fbankFeatures.prefetchToNeuralEngine()
+        weightsArray.prefetchToNeuralEngine()
 
         let output = try embeddingModel.prediction(from: provider, options: options)
         guard let embeddingArray = output.featureValue(for: embeddingOutputName)?.multiArrayValue else {

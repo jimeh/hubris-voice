@@ -57,8 +57,8 @@ The bundle is written to:
 .build/artifacts/Hubris Voice.app
 ```
 
-FluidAudio 0.15.7 is vendored with a small patch that disables SDK logging,
-which otherwise includes vocabulary and transcript text. Its source, licenses,
+FluidAudio 0.15.7 is vendored with patches for compiler compatibility and to
+disable SDK logging, which otherwise includes vocabulary and transcript text. Its source, licenses,
 and patch provenance live in [Vendor/FluidAudio](Vendor/FluidAudio/UPSTREAM.md).
 Builds can fetch its checksum-pinned native binary dependency. Ordinary tests do
 not download speech models or connect to OpenAI.

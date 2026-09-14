@@ -155,11 +155,13 @@ public final class CohereMelSpectrogram {
 
         for frame in 0..<nFrames {
             let start = frame * config.hopLength
-            vDSP_vmul(
-                UnsafePointer(padded).advanced(by: start), 1,
-                paddedWindow, 1,
-                &windowed, 1,
-                vDSP_Length(nFFT))
+            padded.withUnsafeBufferPointer { paddedBuffer in
+                vDSP_vmul(
+                    paddedBuffer.baseAddress!.advanced(by: start), 1,
+                    paddedWindow, 1,
+                    &windowed, 1,
+                    vDSP_Length(nFFT))
+            }
 
             // Pack to split-complex.
             windowed.withUnsafeBufferPointer { buf in

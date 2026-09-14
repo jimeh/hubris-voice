@@ -218,7 +218,7 @@ public actor SlidingWindowAsrManager {
         AsyncStream { continuation in
             self.updateContinuation = continuation
 
-            continuation.onTermination = { @Sendable _ in
+            continuation.onTermination = { @Sendable [weak self] _ in
                 Task { [weak self] in
                     await self?.clearUpdateContinuation()
                 }
@@ -342,7 +342,6 @@ public actor SlidingWindowAsrManager {
         let chunk = config.chunkSamples
         let right = config.rightContextSamples
         let left = config.leftContextSamples
-        let sampleRate = config.asrConfig.sampleRate
 
         var currentAbsEnd = bufferStartIndex + sampleBuffer.count
         while currentAbsEnd >= (nextWindowCenterStart + chunk + right) {
@@ -376,7 +375,6 @@ public actor SlidingWindowAsrManager {
     private func flushRemaining() async {
         let chunk = config.chunkSamples
         let left = config.leftContextSamples
-        let sampleRate = config.asrConfig.sampleRate
 
         var currentAbsEnd = bufferStartIndex + sampleBuffer.count
         while currentAbsEnd > nextWindowCenterStart {  // process until we exhaust

@@ -73,6 +73,13 @@ public enum Supertonic3MultiArray {
             for i in 0..<n {
                 out[i] = Float(src[i])
             }
+        #if compiler(>=6.2)
+        case .int8:
+            let src = arr.dataPointer.bindMemory(to: Int8.self, capacity: n)
+            for i in 0..<n {
+                out[i] = Float(src[i])
+            }
+        #endif
         @unknown default:
             for i in 0..<n {
                 out[i] = arr[i].floatValue

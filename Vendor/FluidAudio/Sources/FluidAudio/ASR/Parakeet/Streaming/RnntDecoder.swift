@@ -88,8 +88,6 @@ public final class RnntDecoder {
         let startT = min(skipFrames, maxT)
 
         outerLoop: for t in startT..<maxT {
-            let globalT = timeOffset + t
-
             // Extract encoder step
             let encoderStep = try extractEncoderStep(from: encoderOutput, timeIndex: t, hiddenDim: hiddenDim)
 
