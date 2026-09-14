@@ -180,6 +180,8 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
     XCTAssertTrue(backend.submit(.finish(id: invocation.id)))
     try await processor.waitForPrepare()
     XCTAssertTrue(backend.submit(.cancel(id: invocation.id)))
+    // The invalid format fails synchronously after earlier commands, proving cancel
+    // was processed before preparation is released.
     let cancellationBarrier = TranscriptionInvocation(
       id: .init(epoch: invocation.id.epoch, generation: invocation.id.generation + 1),
       format: .openAI

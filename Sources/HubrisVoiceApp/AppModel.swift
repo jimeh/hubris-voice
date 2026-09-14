@@ -288,7 +288,10 @@ final class AppModel: ObservableObject {
   private var presentedHistoryEntryID: UUID?
 
   // swiftlint:disable:next function_body_length
-  init(defaults: UserDefaults = .standard) {
+  init(
+    defaults: UserDefaults = .standard,
+    initialSession: DictationSession? = nil
+  ) {
     let settingsStore = UserDefaultsSettingsStore(defaults)
     self.settingsStore = settingsStore
     localModels = LocalModelsController(settings: settingsStore)
@@ -348,7 +351,7 @@ final class AppModel: ObservableObject {
     lastConfirmedAt = nil
     shortcutConflict = Self.conflictMessage(for: settings.shortcuts)
     lastAttentionAt = nil
-    session = DictationSession(
+    session = initialSession ?? DictationSession(
       configuration: .init(tapToLock: settings.tapToLock, format: activeEngine.format),
       readiness: activeEngine == .fluidAudio
         ? .preparing(message: "Loading local model…")
@@ -723,6 +726,14 @@ final class AppModel: ObservableObject {
       if let listening = session.listening {
         presentedHistoryEntryID = recordCancelledTranscript(listening)
       }
+    case .commandRejected(let invocationID, _):
+      let snippet = if session.listening?.id == invocationID {
+        session.listening
+      } else {
+        session.pending.first(where: { $0.id == invocationID })
+      }
+      guard let snippet else { return nil }
+      presentedHistoryEntryID = recordCancelledTranscript(snippet)
     case .engine(.failure(_, nil, _)):
       if let listening = session.listening {
         presentedHistoryEntryID = recordCancelledTranscript(listening)
@@ -1316,6 +1327,13 @@ final class AppModel: ObservableObject {
       settingsMessage = error.localizedDescription
     }
     refreshLoginItemStatus()
+  }
+
+  func testingRejectEngineCommand(
+    id invocationID: TranscriptionInvocationID,
+    message: String
+  ) {
+    apply(.commandRejected(id: invocationID, message: message))
   }
 }
 

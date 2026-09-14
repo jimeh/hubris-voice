@@ -26,7 +26,7 @@ pre-commit:
       glob: "{*.toml,mise.lock}"
       run: |
         mise exec -- taplo format --check {staged_files} || {
-          echo "TOML formatting differs; run: mise run format" >&2
+          echo 'TOML formatting differs; run: mise exec -- taplo format <file> for each file reported above.' >&2
           exit 1
         }
         mise exec -- taplo lint mise.toml && treeboot check && mise tasks validate

@@ -246,6 +246,59 @@ final class AppModelCoordinationTests: XCTestCase {
     XCTAssertEqual(sink.commands, [.finish(id: rejectedID)])
   }
 
+  func testRejectedListeningCommandRecordsCancelledRecoveryHistory() throws {
+    var session = DictationSession(readiness: .ready)
+    _ = session.transition(.pressed)
+    let invocationID = try XCTUnwrap(session.listening?.id)
+    _ = session.transition(.engine(.preview(id: invocationID, text: "recover listening")))
+    let model = try makeModel(initialSession: session)
+
+    model.testingRejectEngineCommand(id: invocationID, message: "Engine closed")
+
+    XCTAssertEqual(model.history.entries.count, 1)
+    XCTAssertEqual(model.history.latest?.text, "recover listening")
+    XCTAssertEqual(model.history.latest?.outcome, .cancelled)
+    XCTAssertEqual(model.overlayModel.transcript, "recover listening")
+    XCTAssertEqual(model.overlayModel.message, "Engine closed · Copy it from the menu bar")
+
+    model.testingRejectEngineCommand(id: invocationID, message: "Already retired")
+    XCTAssertEqual(model.history.entries.count, 1)
+  }
+
+  func testRejectedPendingCommandRecordsCancelledRecoveryHistory() throws {
+    var session = DictationSession(readiness: .ready)
+    let invocationID = try makePending(in: &session)
+    _ = session.transition(.engine(.preview(id: invocationID, text: "recover pending")))
+    let model = try makeModel(initialSession: session)
+
+    model.testingRejectEngineCommand(id: invocationID, message: "Engine closed")
+
+    XCTAssertEqual(model.history.entries.count, 1)
+    XCTAssertEqual(model.history.latest?.text, "recover pending")
+    XCTAssertEqual(model.history.latest?.outcome, .cancelled)
+    XCTAssertEqual(model.overlayModel.transcript, "recover pending")
+    XCTAssertEqual(model.overlayModel.message, "Engine closed · Copy it from the menu bar")
+  }
+
+  func testRejectedCommandDoesNotRecordStaleOrEmptySnippet() throws {
+    var session = DictationSession(readiness: .ready)
+    _ = session.transition(.pressed)
+    let invocationID = try XCTUnwrap(session.listening?.id)
+    let model = try makeModel(initialSession: session)
+    let staleID = TranscriptionInvocationID(
+      epoch: .init(invocationID.epoch.rawValue + 1),
+      generation: invocationID.generation
+    )
+
+    model.testingRejectEngineCommand(id: staleID, message: "Stale")
+    XCTAssertTrue(model.history.entries.isEmpty)
+
+    model.testingRejectEngineCommand(id: invocationID, message: "Engine closed")
+    XCTAssertTrue(model.history.entries.isEmpty)
+    XCTAssertEqual(model.overlayModel.transcript, "")
+    XCTAssertEqual(model.overlayModel.message, "Engine closed")
+  }
+
   func testAcceptedEngineCommandDoesNotReportRejection() {
     let command = TranscriptionEngineCommand.prepare(epoch: .init(3))
     var submittedCommands: [TranscriptionEngineCommand] = []
@@ -338,6 +391,15 @@ final class AppModelCoordinationTests: XCTestCase {
     let invocationID = try XCTUnwrap(session.listening?.id)
     _ = session.transition(.released(heldDuration: 1))
     return invocationID
+  }
+
+  private func makeModel(initialSession: DictationSession) throws -> AppModel {
+    let suite = "HubrisVoice.AppModelCoordinationTest.\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+    addTeardownBlock {
+      UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+    }
+    return AppModel(defaults: defaults, initialSession: initialSession)
   }
 }
 
