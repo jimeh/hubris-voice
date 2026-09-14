@@ -87,6 +87,7 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
     XCTAssertTrue(backend.submit(.append(id: second.id, sequence: 0, audio: Data([1, 0]))))
     XCTAssertTrue(backend.submit(.finish(id: second.id)))
     XCTAssertTrue(backend.submit(.cancel(id: first.id)))
+    try await processor.waitForFinishCancellation()
     await processor.releaseFinish()
 
     _ = try await recorder.waitUntil {
@@ -508,6 +509,7 @@ private actor FakeFluidAudioProcessor: FluidAudioProcessing {
   private var shouldBlockFinish: Bool
   private let ignoreFinishCancellation: Bool
   private var finishStarted = false
+  private var finishCancelled = false
   private var prepareStarted = false
   private var prepareContinuation: CheckedContinuation<Void, Error>?
   private var finishContinuation: CheckedContinuation<Void, Error>?
@@ -572,9 +574,14 @@ private actor FakeFluidAudioProcessor: FluidAudioProcessing {
         finishContinuation = continuation
       }
     }
-    while shouldBlockFinish {
-      try Task.checkCancellation()
-      try await Task.sleep(for: .milliseconds(5))
+    do {
+      while shouldBlockFinish {
+        try Task.checkCancellation()
+        try await Task.sleep(for: .milliseconds(5))
+      }
+    } catch is CancellationError {
+      finishCancelled = true
+      throw CancellationError()
     }
     return finalResult
   }
@@ -609,6 +616,13 @@ private actor FakeFluidAudioProcessor: FluidAudioProcessing {
       try await Task.sleep(for: .milliseconds(5))
     }
     guard finishStarted else { throw TestWaitError.timedOut }
+  }
+
+  func waitForFinishCancellation() async throws {
+    for _ in 0 ..< 200 where !finishCancelled {
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    guard finishCancelled else { throw TestWaitError.timedOut }
   }
 
   func resetCount() -> Int {
