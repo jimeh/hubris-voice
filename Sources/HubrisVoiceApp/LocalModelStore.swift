@@ -10,19 +10,26 @@ protocol LocalModelDownloading: Sendable {
   func download(
     from url: URL,
     to destination: URL,
+    expectedByteCount: Int64,
     progress: @escaping @Sendable (Int64) -> Void
   ) async throws
 }
 
 struct URLSessionModelDownloader: LocalModelDownloading {
+  private let configuration: URLSessionConfiguration
+
+  init(configuration: URLSessionConfiguration = .ephemeral) {
+    configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+    configuration.urlCache = nil
+    self.configuration = configuration
+  }
+
   func download(
     from url: URL,
     to destination: URL,
+    expectedByteCount: Int64,
     progress: @escaping @Sendable (Int64) -> Void
   ) async throws {
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-    configuration.urlCache = nil
     let session = URLSession(configuration: configuration)
     defer { session.invalidateAndCancel() }
 
@@ -52,11 +59,14 @@ struct URLSessionModelDownloader: LocalModelDownloading {
     buffer.reserveCapacity(1_048_576)
     var receivedBytes: Int64 = 0
     for try await byte in bytes {
+      guard receivedBytes < expectedByteCount else {
+        throw LocalModelStore.StoreError.downloadFailed
+      }
       buffer.append(byte)
+      receivedBytes += 1
       if buffer.count >= 1_048_576 {
         try Task.checkCancellation()
         try handle.write(contentsOf: buffer)
-        receivedBytes += Int64(buffer.count)
         progress(receivedBytes)
         buffer.removeAll(keepingCapacity: true)
       }
@@ -64,7 +74,6 @@ struct URLSessionModelDownloader: LocalModelDownloading {
     try Task.checkCancellation()
     if !buffer.isEmpty {
       try handle.write(contentsOf: buffer)
-      receivedBytes += Int64(buffer.count)
       progress(receivedBytes)
     }
     completed = true
@@ -205,7 +214,11 @@ actor LocalModelStore {
       let temporary = destination.appendingPathExtension("part-\(UUID().uuidString)")
       try rejectSymlinks(temporary)
       defer { try? fileManager.removeItem(at: temporary) }
-      try await downloader.download(from: url, to: temporary) { bytes in
+      try await downloader.download(
+        from: url,
+        to: temporary,
+        expectedByteCount: artifact.byteCount
+      ) { bytes in
         progress(.init(completedBytes: base + min(bytes, artifact.byteCount), totalBytes: model.downloadBytes))
       }
       try Task.checkCancellation()

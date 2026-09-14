@@ -100,13 +100,23 @@ export function readSources(file: string): Source[] {
       !Array.isArray(source.paths) ||
       source.paths.length === 0 ||
       !Array.isArray(source.patches) ||
-      names.has(source.name) ||
-      destinations.has(source.destination)
+      names.has(source.name)
     ) {
       throw new Error("invalid or duplicate vendor source");
     }
+    const destination = resolve(dirname(file), source.destination);
+    if (
+      [...destinations].some(
+        (existing) =>
+          destination === existing ||
+          destination.startsWith(`${existing}/`) ||
+          existing.startsWith(`${destination}/`),
+      )
+    ) {
+      throw new Error("invalid or overlapping vendor destination");
+    }
     names.add(source.name);
-    destinations.add(source.destination);
+    destinations.add(destination);
     const paths = new Set<string>();
     for (const selected of source.paths) {
       if (
@@ -209,6 +219,12 @@ export async function archiveFor(
   return destination;
 }
 
+function assertGeneratedVendorDirectory(file: string, info: Stats): void {
+  if (!info.isDirectory()) {
+    throw new Error(`expected generated vendor directory: ${file}`);
+  }
+}
+
 /** Include hidden files, executable bits, and symlink targets. */
 export function treeEntries(
   root: string,
@@ -220,13 +236,16 @@ export function treeEntries(
   const entries = new Map<string, string>();
   function visit(directory: string, prefix: string) {
     for (const name of readdirSync(directory).sort()) {
-      if (!prefix && ignoredTopLevel.has(name)) continue;
-      if (name === ".git") {
-        throw new Error(`unexpected Git metadata in vendor source: ${directory}`);
-      }
       const file = join(directory, name);
       const key = `${prefix}${name}`;
       const info = lstatSync(file);
+      if (!prefix && ignoredTopLevel.has(name)) {
+        assertGeneratedVendorDirectory(file, info);
+        continue;
+      }
+      if (name === ".git") {
+        throw new Error(`unexpected Git metadata in vendor source: ${directory}`);
+      }
       if (info.isDirectory()) visit(file, `${key}/`);
       else if (info.isSymbolicLink()) entries.set(key, `link:${readlinkSync(file)}`);
       else if (info.isFile()) {
@@ -248,6 +267,9 @@ export function sourceEntries(
   source: Source,
   root: string,
 ): Map<string, string> {
+  const build = join(root, ".build");
+  const buildInfo = lstatSync(build, { throwIfNoEntry: false });
+  if (buildInfo) assertGeneratedVendorDirectory(build, buildInfo);
   return treeEntries(root, new Set([".build"]));
 }
 
@@ -256,10 +278,17 @@ export function snapshotSource(
   current: string,
   destination: string,
 ): void {
+  const build = join(current, ".build");
+  const buildInfo = lstatSync(build, { throwIfNoEntry: false });
+  if (buildInfo) assertGeneratedVendorDirectory(build, buildInfo);
   mkdirSync(destination, { recursive: true });
   for (const name of readdirSync(current)) {
-    if (name === ".build") continue;
-    cpSync(join(current, name), join(destination, name), {
+    const input = join(current, name);
+    if (name === ".build") {
+      assertGeneratedVendorDirectory(input, lstatSync(input));
+      continue;
+    }
+    cpSync(input, join(destination, name), {
       recursive: true,
       dereference: false,
       verbatimSymlinks: true,
@@ -327,6 +356,9 @@ export function assertVendorIndexMatchesWorktree(
   inputs = vendorInputs,
   gitIndexFile: string | null | undefined = process.env.GIT_INDEX_FILE,
 ): void {
+  const build = join(cwd, "Vendor/FluidAudio/.build");
+  const buildInfo = lstatSync(build, { throwIfNoEntry: false });
+  if (buildInfo) assertGeneratedVendorDirectory(build, buildInfo);
   const env = isolatedGitEnvironment(cwd, process.env, gitIndexFile);
   const run = (args: string[], paths = inputs) => {
     const result = Bun.spawnSync(["git", ...args, "--", ...paths], {

@@ -46,6 +46,32 @@ final class PCMConverterTests: XCTestCase {
     XCTAssertThrowsError(try PCMConverter(sourceFormat: source, sampleRate: 44_100))
   }
 
+  func testFailedSegmentDrainResetsForTheNextSegment() throws {
+    let output = try XCTUnwrap(AVAudioFormat(
+      commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: false
+    ))
+    var conversionAttempts = 0
+    var resetCount = 0
+    let converter = PCMConverter(
+      outputFormat: output,
+      conversion: { _ in
+        conversionAttempts += 1
+        if conversionAttempts == 1 {
+          throw PCMConverter.ConversionError.failed
+        }
+        return Data([1, 0])
+      },
+      reset: { resetCount += 1 }
+    )
+
+    XCTAssertThrowsError(try converter.finishAndReset())
+    XCTAssertEqual(resetCount, 1)
+    let input = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: output, frameCapacity: 1))
+    input.frameLength = 1
+    XCTAssertEqual(try converter.append(input), Data([1, 0]))
+    XCTAssertEqual(conversionAttempts, 2)
+  }
+
   func testDurationCapsFollowEngineRate() {
     XCTAssertEqual(AudioSnippetBuffer(sampleRate: 16_000).capacityBytes, 2_880_000)
     XCTAssertEqual(AudioSnippetBuffer(sampleRate: 24_000).capacityBytes, AudioSnippetBuffer.defaultCapacityBytes)

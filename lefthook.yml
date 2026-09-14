@@ -24,8 +24,12 @@ pre-commit:
 
     - name: toml
       glob: "{*.toml,mise.lock}"
-      run: mise exec -- taplo format {staged_files} && mise exec -- taplo lint mise.toml && treeboot check && mise tasks validate
-      stage_fixed: true
+      run: |
+        mise exec -- taplo format --check {staged_files} || {
+          echo "TOML formatting differs; run: mise run format" >&2
+          exit 1
+        }
+        mise exec -- taplo lint mise.toml && treeboot check && mise tasks validate
 
     - name: swiftlint-config
       glob: ".swiftlint.yml"

@@ -282,7 +282,7 @@ run = "swift run --package-path Tools/ReleaseTool hubris-voice-release publish"
 
 [tasks."lint:vendor"]
 description = "Verify pinned FluidAudio source and its ordered patch stack"
-run = "bun Scripts/vendor.ts check"
+depends = ["vendor:check"]
 
 [tasks."scripts:install"]
 description = "Install locked TypeScript tooling dependencies"

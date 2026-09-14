@@ -26,6 +26,7 @@ import {
   isolatedGitEnvironment,
   readSources,
   reproduce,
+  snapshotSource,
   treeEntries,
   type Source,
 } from "./vendor";
@@ -225,6 +226,26 @@ test("verification ignores only SwiftPM's local build directory", async () => {
   );
 });
 
+for (const replacement of ["regular file", "symlink"] as const) {
+  test(`verification and snapshots reject a .build ${replacement}`, async () => {
+    const f = await fixture();
+    const build = join(f.vendor, ".build");
+    if (replacement === "regular file") {
+      put(build, "not build output\n");
+    } else {
+      symlinkSync("Sources", build);
+    }
+    await expect(reproduce(f.source, f.root, f.archive)).rejects.toThrow(
+      "expected generated vendor directory",
+    );
+    const snapshot = join(temporary(), "snapshot");
+    expect(() => snapshotSource(f.source, f.vendor, snapshot)).toThrow(
+      "expected generated vendor directory",
+    );
+    expect(existsSync(snapshot)).toBe(false);
+  });
+}
+
 test("patch generation reproduces edits, additions, deletions, binary data, and executable files", async () => {
   const f = await fixture();
   put(join(f.vendor, "Sources/build.swift"), "patched\n");
@@ -347,8 +368,42 @@ test("manifest rejects ambiguous sources, unsafe paths, and unpinned URLs", asyn
   const file = join(f.root, "sources.json");
   put(file, JSON.stringify({ schema: 2, sources: [f.source] }));
   expect(readSources(file)).toEqual([f.source]);
+  put(
+    file,
+    JSON.stringify({
+      schema: 2,
+      sources: [
+        { ...f.source, destination: "../../Vendor/Fixture" },
+        {
+          ...f.source,
+          name: "fixture-tools",
+          destination: "../../Vendor/FixtureTools",
+          patches: [],
+        },
+      ],
+    }),
+  );
+  expect(readSources(file)).toHaveLength(2);
   put(file, JSON.stringify({ schema: 2, sources: [] }));
   expect(readSources(file)).toEqual([]);
+  put(
+    file,
+    JSON.stringify({
+      schema: 2,
+      sources: [
+        { ...f.source, destination: "parent" },
+        {
+          ...f.source,
+          name: "nested",
+          destination: "parent/child",
+          patches: [],
+        },
+      ],
+    }),
+  );
+  expect(() => readSources(file)).toThrow(
+    "invalid or overlapping vendor destination",
+  );
   for (const sources of [
     [f.source, f.source],
     [
@@ -472,6 +527,24 @@ test("index guard rejects vendor-only worktree and untracked drift", () => {
   rmSync(join(root, "Vendor/FluidAudio/ignored.generated"));
   put(join(root, "Vendor/FluidAudio/.build/ignored.generated"), "build output\n");
   assertVendorIndexMatchesWorktree(root, ["Vendor", "third-party/vendor"], null);
+  rmSync(join(root, "Vendor/FluidAudio/.build"), { recursive: true });
+  put(join(root, "Vendor/FluidAudio/.build"), "not build output\n");
+  expect(() =>
+    assertVendorIndexMatchesWorktree(
+      root,
+      ["Vendor", "third-party/vendor"],
+      null,
+    ),
+  ).toThrow("expected generated vendor directory");
+  rmSync(join(root, "Vendor/FluidAudio/.build"));
+  symlinkSync("source.swift", join(root, "Vendor/FluidAudio/.build"));
+  expect(() =>
+    assertVendorIndexMatchesWorktree(
+      root,
+      ["Vendor", "third-party/vendor"],
+      null,
+    ),
+  ).toThrow("expected generated vendor directory");
   expect(command(parent, ["rev-parse", "HEAD"])).toBe(parentHead);
   expect(readFileSync(join(parent, ".git/index"))).toEqual(parentIndex);
 });

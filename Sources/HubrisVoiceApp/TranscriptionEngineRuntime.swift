@@ -7,35 +7,65 @@ import HubrisVoiceCore
 protocol TranscriptionEngineRuntime: AnyObject, Sendable {
   var events: AsyncStream<TranscriptionEngineEvent> { get }
 
-  /// Returns false when the bounded command mailbox cannot accept more work.
+  /// Returns false after shutdown or when the pending PCM append budget is exhausted.
+  /// A live runtime always accepts lifecycle commands so rejected audio can be cancelled.
   func submit(_ command: TranscriptionEngineCommand) -> Bool
 }
 
+/// Preserves one FIFO while bounding only queued PCM appends. Lifecycle commands remain
+/// guaranteed while live; the reducer emits a bounded number of them per invocation.
 final class TranscriptionEngineCommandPipe: @unchecked Sendable {
   let stream: AsyncStream<TranscriptionEngineCommand>
   private let continuation: AsyncStream<TranscriptionEngineCommand>.Continuation
+  private let maximumPendingAudioCommands: Int
+  private let lock = NSLock()
+  private var pendingAudioCommands = 0
+  private var acceptingCommands = true
 
   init(capacity: Int = 512) {
-    let pair = AsyncStream.makeStream(
-      of: TranscriptionEngineCommand.self,
-      bufferingPolicy: .bufferingOldest(capacity)
-    )
+    precondition(capacity > 0)
+    let pair = AsyncStream.makeStream(of: TranscriptionEngineCommand.self)
     stream = pair.stream
     continuation = pair.continuation
+    maximumPendingAudioCommands = capacity
   }
 
   func submit(_ command: TranscriptionEngineCommand) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    guard acceptingCommands else { return false }
+    let reservesAudioPermit = command.isAudioAppend
+    if reservesAudioPermit {
+      guard pendingAudioCommands < maximumPendingAudioCommands else { return false }
+      pendingAudioCommands += 1
+    }
     switch continuation.yield(command) {
     case .enqueued:
-      true
+      return true
     case .dropped, .terminated:
-      false
+      if reservesAudioPermit {
+        pendingAudioCommands -= 1
+      }
+      return false
     @unknown default:
-      false
+      if reservesAudioPermit {
+        pendingAudioCommands -= 1
+      }
+      return false
     }
   }
 
+  func didConsume(_ command: TranscriptionEngineCommand) {
+    guard command.isAudioAppend else { return }
+    lock.lock()
+    pendingAudioCommands -= 1
+    lock.unlock()
+  }
+
   func finish() {
+    lock.lock()
+    acceptingCommands = false
+    lock.unlock()
     continuation.finish()
   }
 }
@@ -59,6 +89,10 @@ final class TranscriptionEngineCoordinator {
     events = pair.stream
     eventContinuation = pair.continuation
     consume(runtime.events, epoch: epoch)
+  }
+
+  deinit {
+    eventTask?.cancel()
   }
 
   @discardableResult
@@ -90,7 +124,9 @@ final class TranscriptionEngineCoordinator {
   ) {
     eventTask = Task { [weak self] in
       for await event in runtimeEvents {
-        guard let self, self.epoch == epoch, event.epoch == epoch else { continue }
+        guard let self else { return }
+        guard self.epoch == epoch else { return }
+        guard event.epoch == epoch else { continue }
         if let id = event.invocationID {
           if terminalInvocations.contains(id) {
             continue
@@ -113,6 +149,14 @@ final class TranscriptionEngineCoordinator {
 }
 
 private extension TranscriptionEngineCommand {
+  var isAudioAppend: Bool {
+    if case .append = self {
+      true
+    } else {
+      false
+    }
+  }
+
   var epoch: TranscriptionBackendEpoch {
     switch self {
     case .prepare(let epoch): epoch

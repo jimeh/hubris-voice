@@ -45,6 +45,7 @@ final class OpenAITranscriptionBackend: TranscriptionEngineRuntime, @unchecked S
     commandTask = Task { [state] in
       await state.start()
       for await command in commandStream {
+        commands.didConsume(command)
         guard !Task.isCancelled else { return }
         await state.handle(command)
       }

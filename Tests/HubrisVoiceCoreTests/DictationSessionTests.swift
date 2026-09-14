@@ -2,7 +2,7 @@
 import XCTest
 
 // `id` consistently means a transcription invocation identity in these tests.
-// swiftlint:disable force_try identifier_name
+// swiftlint:disable identifier_name
 
 final class DictationSessionTests: XCTestCase {
   func testPressBeginsGenerationAddressedInvocationAtCloudFormat() {
@@ -97,7 +97,7 @@ final class DictationSessionTests: XCTestCase {
   }
 
   func testFinalRecordsBeforeInsertionAndDuplicateIsIgnored() throws {
-    var session = pendingSession()
+    var session = try pendingSession()
     let id = try XCTUnwrap(session.pending.first?.id)
     let event = TranscriptionEngineEvent.final(
       id: id,
@@ -114,25 +114,25 @@ final class DictationSessionTests: XCTestCase {
     XCTAssertEqual(session.transition(.engine(event)), [])
   }
 
-  func testPendingSnippetsCanCompleteOutOfOrder() {
+  func testPendingSnippetsCanCompleteOutOfOrder() throws {
     var session = readySession()
-    _ = makePending(in: &session)
-    _ = makePending(in: &session)
+    _ = try makePending(in: &session)
+    _ = try makePending(in: &session)
     let ids = session.pending.map(\.id)
     XCTAssertEqual(final(&session, id: ids[1], text: "two").last, .insert(generation: 1, text: "two"))
     XCTAssertEqual(final(&session, id: ids[0], text: "one").last, .insert(generation: 0, text: "one"))
   }
 
-  func testPendingLimitRemainsFourByDefault() {
+  func testPendingLimitRemainsFourByDefault() throws {
     var session = readySession()
     for _ in 0 ..< 4 {
-      _ = makePending(in: &session)
+      _ = try makePending(in: &session)
     }
     XCTAssertEqual(session.transition(.pressed), [.scheduleDismiss(after: .seconds(4))])
   }
 
   func testTimeoutRetiresGenerationAndKeepsPreviewForRecovery() throws {
-    var session = pendingSession()
+    var session = try pendingSession()
     let id = try XCTUnwrap(session.pending.first?.id)
     _ = session.transition(.engine(.preview(id: id, text: "partial")))
     XCTAssertEqual(
@@ -147,8 +147,8 @@ final class DictationSessionTests: XCTestCase {
     XCTAssertEqual(final(&session, id: id, text: "late"), [])
   }
 
-  func testStaleEpochEventsCannotMutateOrInsert() {
-    var session = pendingSession(epoch: .init(9))
+  func testStaleEpochEventsCannotMutateOrInsert() throws {
+    var session = try pendingSession(epoch: .init(9))
     let stale = TranscriptionInvocationID(epoch: .init(8), generation: 0)
     XCTAssertEqual(session.transition(.engine(.preview(id: stale, text: "stale"))), [])
     XCTAssertEqual(final(&session, id: stale, text: "stale"), [])
@@ -156,7 +156,7 @@ final class DictationSessionTests: XCTestCase {
   }
 
   func testTargetedFailureKeepsPreviewAndRetiresOnlyItsGeneration() throws {
-    var session = pendingSession()
+    var session = try pendingSession()
     let id = try XCTUnwrap(session.pending.first?.id)
     _ = session.transition(.engine(.preview(id: id, text: "recover me")))
     XCTAssertEqual(
@@ -212,13 +212,13 @@ final class DictationSessionTests: XCTestCase {
   func testCancellationRetiresPendingAndQueuedInsertionsButKeepsStartedInsertion() throws {
     var session = readySession()
 
-    let startedID = makePending(in: &session)
+    let startedID = try makePending(in: &session)
     _ = final(&session, id: startedID, text: "already started")
     _ = session.transition(.insertionStarted(generation: startedID.generation))
 
-    let queuedID = makePending(in: &session)
+    let queuedID = try makePending(in: &session)
     _ = final(&session, id: queuedID, text: "queued")
-    let pendingID = makePending(in: &session)
+    let pendingID = try makePending(in: &session)
 
     XCTAssertEqual(
       session.transition(.cancelRequested),
@@ -237,7 +237,7 @@ final class DictationSessionTests: XCTestCase {
 
   func testInsertionStartedIgnoresMissingOrRepeatedGeneration() throws {
     var session = readySession()
-    let id = makePending(in: &session)
+    let id = try makePending(in: &session)
     _ = final(&session, id: id, text: "queued")
 
     XCTAssertEqual(session.transition(.insertionStarted(generation: 99)), [])
@@ -256,16 +256,16 @@ private extension DictationSessionTests {
     DictationSession(configuration: configuration, epoch: epoch, readiness: .ready)
   }
 
-  func pendingSession(epoch: TranscriptionBackendEpoch = .init(7)) -> DictationSession {
+  func pendingSession(epoch: TranscriptionBackendEpoch = .init(7)) throws -> DictationSession {
     var session = readySession(epoch: epoch)
-    _ = makePending(in: &session)
+    _ = try makePending(in: &session)
     return session
   }
 
   @discardableResult
-  func makePending(in session: inout DictationSession) -> TranscriptionInvocationID {
+  func makePending(in session: inout DictationSession) throws -> TranscriptionInvocationID {
     _ = session.transition(.pressed)
-    let id = try! XCTUnwrap(session.listening?.id)
+    let id = try XCTUnwrap(session.listening?.id)
     _ = session.transition(.released(heldDuration: 1))
     return id
   }
@@ -282,4 +282,4 @@ private extension DictationSessionTests {
   }
 }
 
-// swiftlint:enable force_try identifier_name
+// swiftlint:enable identifier_name

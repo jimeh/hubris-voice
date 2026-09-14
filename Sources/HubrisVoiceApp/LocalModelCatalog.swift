@@ -1,4 +1,5 @@
 import Foundation
+import HubrisVoiceCore
 
 struct LocalModelArtifact: Equatable, Sendable {
   let relativePath: String
@@ -24,11 +25,11 @@ struct LocalModelDefinition: Identifiable, Equatable, Sendable {
 }
 
 enum LocalModelCatalog {
-  static let primaryID = "parakeet-unified-en-320ms"
+  static let primaryID = TranscriptionPreferences.defaultLocalModel
   static let correctionID = "parakeet-ctc-110m"
   static let models: [LocalModelDefinition] = [
     LocalModelDefinition(
-      id: "parakeet-unified-en-320ms", title: "Parakeet Unified · English",
+      id: primaryID, title: "Parakeet Unified · English",
       repository: "FluidInference/parakeet-unified-en-0.6b-coreml",
       revision: "4252711f6f060f9a2f91e5f081a806d7f45eebd8", license: "CC BY 4.0",
       artifacts: [
@@ -110,7 +111,7 @@ enum LocalModelCatalog {
       ]
     ),
     LocalModelDefinition(
-      id: "parakeet-ctc-110m", title: "Dictionary correction",
+      id: correctionID, title: "Dictionary correction",
       repository: "FluidInference/parakeet-ctc-110m-coreml",
       revision: "accdafd8cf8a2ff1cabe3c11e54416b405d409aa", license: "CC BY 4.0",
       artifacts: [

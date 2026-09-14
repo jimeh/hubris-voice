@@ -66,6 +66,7 @@ final class FluidAudioTranscriptionBackend: TranscriptionEngineRuntime, @uncheck
     let stream = commands.stream
     commandTask = Task { [state] in
       for await command in stream {
+        commands.didConsume(command)
         guard !Task.isCancelled else { return }
         await state.handle(command)
       }

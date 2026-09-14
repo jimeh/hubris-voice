@@ -3,13 +3,16 @@ import Foundation
 
 /// One converter per capture. Its owner serializes input and drains it before ending audio.
 final class PCMConverter {
+  typealias Conversion = (@escaping AVAudioConverterInputBlock) throws -> Data
+
   enum ConversionError: Error {
     case unsupportedFormat
     case failed
   }
 
   let outputFormat: AVAudioFormat
-  private let converter: AVAudioConverter
+  private let conversion: Conversion
+  private let resetConverter: () -> Void
   private var finished = false
 
   init(sourceFormat: AVAudioFormat, sampleRate: Double) throws {
@@ -21,7 +24,20 @@ final class PCMConverter {
           let converter = AVAudioConverter(from: sourceFormat, to: output)
     else { throw ConversionError.unsupportedFormat }
     outputFormat = output
-    self.converter = converter
+    conversion = { input in
+      try Self.convert(using: converter, outputFormat: output, input: input)
+    }
+    resetConverter = { converter.reset() }
+  }
+
+  init(
+    outputFormat: AVAudioFormat,
+    conversion: @escaping Conversion,
+    reset: @escaping () -> Void
+  ) {
+    self.outputFormat = outputFormat
+    self.conversion = conversion
+    resetConverter = reset
   }
 
   func append(_ buffer: AVAudioPCMBuffer) throws -> Data {
@@ -40,13 +56,22 @@ final class PCMConverter {
   }
 
   func finishAndReset() throws -> Data {
-    let tail = try finish()
-    converter.reset()
-    finished = false
-    return tail
+    defer {
+      resetConverter()
+      finished = false
+    }
+    return try finish()
   }
 
   private func convert(_ input: @escaping AVAudioConverterInputBlock) throws -> Data {
+    try conversion(input)
+  }
+
+  private static func convert(
+    using converter: AVAudioConverter,
+    outputFormat: AVAudioFormat,
+    input: @escaping AVAudioConverterInputBlock
+  ) throws -> Data {
     var result = Data()
     while true {
       guard let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 4_096) else {
