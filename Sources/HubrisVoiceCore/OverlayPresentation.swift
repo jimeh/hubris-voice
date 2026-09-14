@@ -66,8 +66,15 @@ public struct PillLayoutPolicy: Equatable, Sendable {
 @MainActor
 public final class DelayedActionScheduler {
   private var task: Task<Void, Never>?
+  private let sleep: @Sendable (Duration) async throws -> Void
 
-  public init() {}
+  public convenience init() {
+    self.init(sleep: { try await Task.sleep(for: $0) })
+  }
+
+  init(sleep: @escaping @Sendable (Duration) async throws -> Void) {
+    self.sleep = sleep
+  }
 
   deinit {
     task?.cancel()
@@ -78,9 +85,10 @@ public final class DelayedActionScheduler {
     action: @escaping @MainActor @Sendable () -> Void
   ) {
     cancel()
+    let sleep = sleep
     task = Task { @MainActor [weak self] in
       do {
-        try await Task.sleep(for: delay)
+        try await sleep(delay)
       } catch {
         return
       }

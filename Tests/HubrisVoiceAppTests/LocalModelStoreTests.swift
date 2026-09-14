@@ -108,7 +108,12 @@ final class LocalModelStoreTests: XCTestCase {
       try await store.install("test")
     }
 
-    await downloader.waitUntilRequested("second")
+    let didSuspend = await downloader.waitUntilSuspended("second")
+    guard didSuspend else {
+      install.cancel()
+      XCTFail("The second download did not suspend before the deadline")
+      return
+    }
     install.cancel()
     do {
       try await install.value
@@ -305,11 +310,18 @@ private struct Fixture {
 }
 
 private actor FixtureDownloader: LocalModelDownloading {
+  private struct SuspensionWaiter {
+    let continuation: CheckedContinuation<Bool, Never>
+    let timeoutTask: Task<Void, Never>
+  }
+
   var corruptSecond: Bool
   var suspendAt: String?
   var counts: [String: Int] = [:]
   var expectedByteCounts: [String: [Int64]] = [:]
-  private var requestWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+  private var suspendedNames: Set<String> = []
+  private var suspensionContinuations: [String: CheckedContinuation<Void, any Error>] = [:]
+  private var suspensionWaiters: [String: SuspensionWaiter] = [:]
 
   init(root _: URL, corruptSecond: Bool = false, suspendAt: String? = nil) {
     self.corruptSecond = corruptSecond
@@ -324,12 +336,23 @@ private actor FixtureDownloader: LocalModelDownloading {
     suspendAt = name
   }
 
-  func waitUntilRequested(_ name: String) async {
-    if counts[name, default: 0] > 0 {
-      return
+  func waitUntilSuspended(_ name: String, timeout: Duration = .seconds(1)) async -> Bool {
+    if suspendedNames.contains(name) {
+      return true
     }
-    await withCheckedContinuation { continuation in
-      requestWaiters[name, default: []].append(continuation)
+    return await withCheckedContinuation { continuation in
+      let timeoutTask = Task { [weak self] in
+        do {
+          try await Task.sleep(for: timeout)
+        } catch {
+          return
+        }
+        await self?.finishSuspensionWaiter(name, result: false)
+      }
+      suspensionWaiters[name] = SuspensionWaiter(
+        continuation: continuation,
+        timeoutTask: timeoutTask
+      )
     }
   }
 
@@ -342,15 +365,37 @@ private actor FixtureDownloader: LocalModelDownloading {
     let name = url.lastPathComponent
     counts[name, default: 0] += 1
     expectedByteCounts[name, default: []].append(expectedByteCount)
-    let waiters = requestWaiters.removeValue(forKey: name) ?? []
-    waiters.forEach { $0.resume() }
     if suspendAt == name {
       try Data("partial".utf8).write(to: destination)
-      try await Task.sleep(for: .seconds(60))
+      try await withTaskCancellationHandler {
+        try Task.checkCancellation()
+        try await withCheckedThrowingContinuation { continuation in
+          suspendedNames.insert(name)
+          suspensionContinuations[name] = continuation
+          finishSuspensionWaiter(name, result: true)
+        }
+      } onCancel: {
+        Task { await self.cancelSuspension(name) }
+      }
     }
     let data = Data((corruptSecond && name == "second" ? "broken" : name).utf8)
     try data.write(to: destination)
     progress(Int64(data.count))
+  }
+
+  private func cancelSuspension(_ name: String) {
+    suspendedNames.remove(name)
+    suspensionContinuations.removeValue(forKey: name)?.resume(
+      throwing: CancellationError()
+    )
+  }
+
+  private func finishSuspensionWaiter(_ name: String, result: Bool) {
+    guard let waiter = suspensionWaiters.removeValue(forKey: name) else {
+      return
+    }
+    waiter.timeoutTask.cancel()
+    waiter.continuation.resume(returning: result)
   }
 }
 

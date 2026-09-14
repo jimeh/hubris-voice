@@ -11,7 +11,11 @@ final class RealtimeConnectionHandshakeTests: XCTestCase {
       await probe.markCompleted()
     }
 
-    try await Task.sleep(for: .milliseconds(20))
+    let didStartWaiting = await waitUntilWaiting(handshake)
+    XCTAssertTrue(
+      didStartWaiting,
+      "waitForOpen never registered its waiter within the 1 s poll bound"
+    )
     let completedBeforeOpen = await probe.isCompleted
     XCTAssertFalse(completedBeforeOpen)
 
@@ -76,6 +80,21 @@ final class RealtimeConnectionHandshakeTests: XCTestCase {
         + "The network connection was lost."
     )
   }
+}
+
+private func waitUntilWaiting(
+  _ handshake: RealtimeConnectionHandshake,
+  timeout: Duration = .seconds(1)
+) async -> Bool {
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: timeout)
+  while clock.now < deadline {
+    if await handshake.isWaitingForOpen {
+      return true
+    }
+    await Task.yield()
+  }
+  return await handshake.isWaitingForOpen
 }
 
 private actor CompletionProbe {
