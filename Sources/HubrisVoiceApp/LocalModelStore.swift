@@ -292,15 +292,19 @@ actor LocalModelStore {
 
   private func rejectSymlinks(_ url: URL) throws {
     var candidate = url.standardizedFileURL
-    let boundary = root.standardizedFileURL.deletingLastPathComponent()
-    guard candidate.path.hasPrefix(root.standardizedFileURL.path + "/") || candidate == root.standardizedFileURL else {
+    let standardizedRoot = root.standardizedFileURL
+    let ownedBoundary = standardizedRoot.deletingLastPathComponent()
+    guard candidate.path.hasPrefix(standardizedRoot.path + "/") || candidate == standardizedRoot else {
       throw StoreError.unsafePath
     }
-    while candidate != boundary {
+    while true {
       if let attributes = try? fileManager.attributesOfItem(atPath: candidate.path),
          attributes[.type] as? FileAttributeType == .typeSymbolicLink
       {
         throw StoreError.unsafePath
+      }
+      if candidate == ownedBoundary {
+        break
       }
       candidate.deleteLastPathComponent()
     }

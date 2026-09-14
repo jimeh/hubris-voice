@@ -8,6 +8,27 @@ final class TranscriptionPreferencesTests: XCTestCase {
     XCTAssertFalse(preferences.correctionEnabled)
   }
 
+  func testValidEngineSelectionIsLoaded() {
+    let store = PreferenceStore()
+    store.set(TranscriptionEngineSelection.openAI.rawValue, for: TranscriptionPreferences.Key.engine)
+
+    XCTAssertEqual(TranscriptionPreferences.load(from: store).engine, .openAI)
+  }
+
+  func testUnknownEngineSelectionFallsBackToLocal() {
+    let store = PreferenceStore()
+    store.set("retired-engine", for: TranscriptionPreferences.Key.engine)
+
+    XCTAssertEqual(TranscriptionPreferences.load(from: store).engine, .fluidAudio)
+  }
+
+  func testWrongTypedEngineSelectionFallsBackToLocal() {
+    let store = PreferenceStore()
+    store.set(42, for: TranscriptionPreferences.Key.engine)
+
+    XCTAssertEqual(TranscriptionPreferences.load(from: store).engine, .fluidAudio)
+  }
+
   func testSwitchingToCloudSerializesOnlyTheCloudVocabulary() throws {
     let store = PreferenceStore()
     DictationSettings(dictionary: ["CloudVocabulary"]).save(to: store)

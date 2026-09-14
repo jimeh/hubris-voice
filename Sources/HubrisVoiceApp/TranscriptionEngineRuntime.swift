@@ -64,11 +64,12 @@ final class TranscriptionEngineCoordinator {
   @discardableResult
   func submit(_ command: TranscriptionEngineCommand) -> Bool {
     guard command.epoch == epoch else { return false }
-    if case .cancel(let id) = command {
+    let accepted = runtime.submit(command)
+    if accepted, case .cancel(let id) = command {
       terminalInvocations.insert(id)
       trimTerminalInvocations()
     }
-    return runtime.submit(command)
+    return accepted
   }
 
   func replace(

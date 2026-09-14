@@ -131,6 +131,72 @@ final class LocalModelStoreTests: XCTestCase {
     } catch LocalModelStore.StoreError.unsafePath {}
     XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.downloadRoot.path))
   }
+
+  func testSymbolicLinkOwnedParentRejectsInstallWithoutChangingTarget() async throws {
+    let fixture = try OwnedParentSymlinkFixture()
+    defer { fixture.clean() }
+    let store = fixture.store()
+
+    do {
+      try await store.install("test")
+      XCTFail("A symbolic link is not an owned model parent")
+    } catch LocalModelStore.StoreError.unsafePath {}
+
+    XCTAssertEqual(try Data(contentsOf: fixture.sentinel), Data("preserve".utf8))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.externalModelRoot.path))
+  }
+
+  func testSymbolicLinkOwnedParentRejectsRemovalWithoutChangingTarget() async throws {
+    let fixture = try OwnedParentSymlinkFixture(installedModel: true)
+    defer { fixture.clean() }
+    let store = fixture.store()
+
+    do {
+      try await store.remove("test")
+      XCTFail("Removal must not traverse a symbolic model parent")
+    } catch LocalModelStore.StoreError.unsafePath {}
+
+    XCTAssertEqual(try Data(contentsOf: fixture.sentinel), Data("preserve".utf8))
+    XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.externalModelRoot.path))
+  }
+}
+
+private struct OwnedParentSymlinkFixture {
+  let scratch: URL
+  let ownedParent: URL
+  let externalParent: URL
+  let sentinel: URL
+
+  var modelRoot: URL {
+    ownedParent.appendingPathComponent("Models")
+  }
+
+  var externalModelRoot: URL {
+    externalParent.appendingPathComponent("Models/test-immutable")
+  }
+
+  init(installedModel: Bool = false) throws {
+    scratch = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    ownedParent = scratch.appendingPathComponent("Hubris Voice")
+    externalParent = scratch.appendingPathComponent("External")
+    sentinel = externalParent.appendingPathComponent("sentinel")
+    try FileManager.default.createDirectory(at: externalParent, withIntermediateDirectories: true)
+    try Data("preserve".utf8).write(to: sentinel)
+    if installedModel {
+      try FileManager.default.createDirectory(at: externalModelRoot, withIntermediateDirectories: true)
+      try Data("first".utf8).write(to: externalModelRoot.appendingPathComponent("first"))
+      try Data("second".utf8).write(to: externalModelRoot.appendingPathComponent("second"))
+    }
+    try FileManager.default.createSymbolicLink(at: ownedParent, withDestinationURL: externalParent)
+  }
+
+  func clean() {
+    try? FileManager.default.removeItem(at: scratch)
+  }
+
+  func store() -> LocalModelStore {
+    Fixture.store(root: modelRoot)
+  }
 }
 
 private struct Fixture {
@@ -171,6 +237,19 @@ private struct Fixture {
       downloader: downloader ?? FixtureDownloader(root: downloadRoot),
       fileManager: fileManager
     )
+  }
+
+  static func store(root: URL) -> LocalModelStore {
+    let artifacts = ["first", "second"].map { name in
+      LocalModelArtifact(
+        relativePath: name, byteCount: Int64(name.utf8.count),
+        sha256: SHA256.hash(data: Data(name.utf8)).map { String(format: "%02x", $0) }.joined()
+      )
+    }
+    let model = LocalModelDefinition(
+      id: "test", title: "Test", repository: "test/model", revision: "immutable", license: "Test", artifacts: artifacts
+    )
+    return LocalModelStore(root: root, catalog: [model], downloader: FixtureDownloader(root: root))
   }
 }
 

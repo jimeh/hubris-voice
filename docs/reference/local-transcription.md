@@ -50,6 +50,12 @@ canonical term substitutions, rejects isolated insertions/deletions and
 unsupported protected-word consumption, and preserves surrounding text.
 These constraints reduce regressions but cannot guarantee correct substitutions.
 
+Aliases participate in candidate matching and acceptance, but the current CTC
+pipeline scores the canonical spelling. An alias with a substantially different
+pronunciation can therefore miss a correction. Scoring alias pronunciations and
+mapping the winning form back to its canonical spelling remains a correction
+quality follow-up that needs paired corpus evaluation.
+
 Live previews are raw. Only accepted final text enters insertion and history.
 Correction failure keeps raw text and reports degraded correction. Disabling
 correction avoids loading CTC or creating a rescorer. Public tokenizer, spotter,
@@ -60,8 +66,9 @@ with audio context on either side.
 
 FluidAudio's original logger contains transcript and vocabulary interpolation.
 The vendored logger has no output sink in either debug or release builds.
-`mise run lint:vendor` verifies the exact upstream snapshot and patch, including
-the documented compiler-compatibility fixes. The commit hook verifies vendor
+`mise run lint:vendor` verifies the pinned archive and ordered patches in
+`third-party/vendor/sources.json`, including the documented compiler-compatibility
+fixes. The commit hook checks index/worktree agreement before verifying vendor
 integrity instead of formatting third-party sources. Hubris
 Voice's optional raw development trace is also suppressed while local mode is
 selected. Normal diagnostics contain no local vocabulary or transcript text.

@@ -41,7 +41,8 @@ public struct TranscriptionPreferences: Equatable, Sendable {
 
   public static func load(from store: SettingsStore) -> Self {
     Self(
-      engine: store.string(Key.engine).flatMap(TranscriptionEngineSelection.init(rawValue:)) ?? .openAI,
+      engine: store.string(Key.engine).flatMap(TranscriptionEngineSelection.init(rawValue:))
+        ?? (store.contains(Key.engine) ? .fluidAudio : .openAI),
       localModel: store.string(Key.localModel) ?? defaultLocalModel,
       correctionEnabled: store.bool(Key.correctionEnabled) ?? false
     )
