@@ -524,7 +524,7 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
     XCTAssertEqual(correctionReleaseCount, 2)
   }
 
-  func testRepreparationBlocksNewInvocationUntilReady() async throws {
+  func testRepreparationBlocksNewInvocation() async throws {
     let processor = FakeFluidAudioProcessor(
       final: FluidAudioProcessResult(rawText: "unused", candidateText: nil)
     )
@@ -569,6 +569,70 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
 
     let resetCount = await processor.resetCount()
     XCTAssertEqual(resetCount, 0)
+  }
+
+  func testRepreparationProcessesQueuedInvocationWhenReady() async throws {
+    let processor = FakeFluidAudioProcessor(
+      final: FluidAudioProcessResult(rawText: "queued result", candidateText: nil)
+    )
+    let eventPair = AsyncStream.makeStream(of: TranscriptionEngineEvent.self)
+    let state = FluidAudioTranscriptionState(
+      context: .init(permanentEntries: []),
+      correctionPolicy: .disabled,
+      processor: processor,
+      acquireModels: { _, _ in
+        FluidAudioModelLease(
+          primaryDirectory: URL(fileURLWithPath: "/owned/primary"),
+          release: {}
+        )
+      },
+      acquireCorrection: { nil },
+      events: eventPair.continuation
+    )
+    let recorder = EventRecorder(stream: eventPair.stream)
+    let initialEpoch = TranscriptionBackendEpoch(9)
+    let replacementEpoch = TranscriptionBackendEpoch(10)
+    let invocation = TranscriptionInvocation(
+      id: TranscriptionInvocationID(epoch: replacementEpoch, generation: 1),
+      format: .local
+    )
+
+    await state.handle(.prepare(epoch: initialEpoch))
+    _ = try await recorder.waitUntil {
+      if case .readiness(initialEpoch, .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+    await processor.blockNextPrepare()
+    await state.handle(.prepare(epoch: replacementEpoch))
+    try await processor.waitForPrepareCount(2)
+    await state.handle(.begin(invocation))
+    await state.handle(.append(id: invocation.id, sequence: 0, audio: Data([0, 0])))
+    await state.handle(.finish(id: invocation.id))
+
+    await processor.releasePrepare()
+    _ = try await recorder.waitUntil {
+      if case .readiness(replacementEpoch, .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+    let final = try await recorder.waitUntil {
+      if case .final(id: invocation.id, _) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+
+    XCTAssertEqual(final, .final(
+      id: invocation.id,
+      result: TranscriptionFinalResult(text: "queued result", correction: .disabled)
+    ))
+    await state.unload()
   }
 
   func testIdleConfigurationUpdateKeepsPrimaryLoadedAndAppliesToNextInvocation() async throws {
