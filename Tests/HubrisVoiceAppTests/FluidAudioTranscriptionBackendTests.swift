@@ -383,7 +383,7 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
     try await correctionReleases.waitUntilBlocked()
 
     let unloadTask = Task { await backend.unload() }
-    await correctionReleases.waitUntilCancellationObserved()
+    try await correctionReleases.waitUntilCancellationObserved()
     await correctionReleases.resume()
     await unloadTask.value
 
@@ -1030,7 +1030,6 @@ private actor ReleaseRecorder {
   private var isBlocked = false
   private var cancellationObserved = false
   private var continuation: CheckedContinuation<Void, Never>?
-  private var cancellationWaiters: [CheckedContinuation<Void, Never>] = []
 
   init(blockNext: Bool = false) {
     shouldBlockNext = blockNext
@@ -1067,20 +1066,15 @@ private actor ReleaseRecorder {
     continuation = nil
   }
 
-  func waitUntilCancellationObserved() async {
-    guard !cancellationObserved else { return }
-    await withCheckedContinuation { continuation in
-      cancellationWaiters.append(continuation)
+  func waitUntilCancellationObserved() async throws {
+    for _ in 0 ..< 200 where !cancellationObserved {
+      try await Task.sleep(for: .milliseconds(5))
     }
+    guard cancellationObserved else { throw TestWaitError.timedOut }
   }
 
   private func recordCancellation() {
     cancellationObserved = true
-    let waiters = cancellationWaiters
-    cancellationWaiters.removeAll()
-    for waiter in waiters {
-      waiter.resume()
-    }
   }
 }
 
