@@ -372,6 +372,38 @@ final class OpenAITranscriptionBackendTests: XCTestCase {
     )
   }
 
+  func testCumulativeProviderPreviewOverflowDisablesActiveItemInference() async throws {
+    let fixture = await Fixture.make()
+    let old = fixture.invocation(0)
+    await fixture.backend.testingHandle(.begin(old))
+    await fixture.backend.testingHandle(.append(id: old.id, sequence: 0, audio: Data([1])))
+    await fixture.backend.testingHandle(.finish(id: old.id))
+    let active = fixture.invocation(1)
+    await fixture.backend.testingHandle(.begin(active))
+    await fixture.backend.testingHandle(.append(id: active.id, sequence: 0, audio: Data([2])))
+
+    let maximumPreview = String(repeating: "x", count: 65_536)
+    await fixture.backend.testingReceive(
+      .transcriptDelta(itemID: "old-item", delta: maximumPreview)
+    )
+    await fixture.backend.testingReceive(.transcriptDelta(itemID: "old-item", delta: "x"))
+    await fixture.backend.testingReceive(.transcriptDelta(itemID: "candidate", delta: "Wrong"))
+    await fixture.backend.testingReceive(.inputCommitted(itemID: "old-item"))
+    let oldPreview = try await fixture.next()
+    XCTAssertEqual(oldPreview, .preview(id: old.id, text: maximumPreview))
+
+    await fixture.backend.testingHandle(.finish(id: active.id))
+    await fixture.backend.testingReceive(.inputCommitted(itemID: "active-item"))
+    await fixture.backend.testingReceive(
+      .transcriptCompleted(itemID: "active-item", transcript: "Authoritative final")
+    )
+    let final = try await fixture.next()
+    XCTAssertEqual(
+      final,
+      .final(id: active.id, result: .init(text: "Authoritative final", correction: .disabled))
+    )
+  }
+
   func testFailedUnassignedCommitCannotLeakBufferedPreviewIntoLaterInput() async throws {
     let fixture = await Fixture.make()
     let old = fixture.invocation(0)

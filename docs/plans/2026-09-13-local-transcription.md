@@ -356,8 +356,9 @@ implementation delegation does not authorize commits, pushes, or publication.
 - Milestone 0 model-asset ownership is resolved by the public-API isolation probe.
   Xcode 27 signed packaging and long-input correction now pass locally. The
   Xcode 16.0/26.3 CI also passed on the initial PR candidate.
-- Fresh recordings must determine whether this correction policy is suitable for
-  default-on use. For this plan the answer is settled as opt-in.
+- Correction defaults to enabled following manual testing and the user's
+  decision. Further recordings should refine precision without blocking the
+  technical foundation; saved disabled preferences remain respected.
 - Jim confirmed that a selected local model stays loaded while the app runs,
   unless explicitly unloaded. Also unload on backend switch/removal. Do not add
   automatic idle eviction. OpenAI remains the default engine.

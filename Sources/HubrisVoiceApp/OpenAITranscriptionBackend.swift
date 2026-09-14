@@ -634,7 +634,10 @@ private actor OpenAITranscriptionState {
       return
     }
     let byteCount = delta.utf8.count
-    guard byteCount <= Self.maximumBufferedPreviewBytesPerItem - preview.byteCount else { return }
+    guard byteCount <= Self.maximumBufferedPreviewBytesPerItem - preview.byteCount else {
+      didOverflowBufferedProviderItems = true
+      return
+    }
     preview.text += delta
     preview.byteCount += byteCount
     bufferedProviderPreviews[itemID] = preview
