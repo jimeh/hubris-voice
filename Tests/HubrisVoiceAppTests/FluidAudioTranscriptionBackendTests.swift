@@ -218,6 +218,128 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
     await backend.unload()
   }
 
+  func testRetiredInvocationCannotBeginAgain() async throws {
+    let processor = FakeFluidAudioProcessor(
+      final: FluidAudioProcessResult(rawText: "unused", candidateText: nil)
+    )
+    let backend = makeBackend(processor: processor, policy: .disabled)
+    let recorder = EventRecorder(stream: backend.events)
+    let invocation = makeInvocation(generation: 20)
+
+    XCTAssertTrue(backend.submit(.prepare(epoch: invocation.id.epoch)))
+    _ = try await recorder.waitUntil {
+      if case .readiness(_, .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+    XCTAssertTrue(backend.submit(.begin(invocation)))
+    XCTAssertTrue(backend.submit(.cancel(id: invocation.id)))
+    XCTAssertTrue(backend.submit(.begin(invocation)))
+    XCTAssertTrue(backend.submit(.append(id: invocation.id, sequence: 0, audio: Data([1, 0]))))
+    XCTAssertTrue(backend.submit(.finish(id: invocation.id)))
+
+    let barrier = makeInvocation(generation: 21)
+    XCTAssertTrue(backend.submit(.begin(barrier)))
+    XCTAssertTrue(backend.submit(.finish(id: barrier.id)))
+    _ = try await recorder.waitUntil {
+      if case .final(id: barrier.id, _) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+    let appendedChunks = await processor.appendedChunks()
+    XCTAssertEqual(appendedChunks, [])
+  }
+
+  func testAppendAfterFinishIsIgnored() async throws {
+    let processor = FakeFluidAudioProcessor(
+      final: FluidAudioProcessResult(rawText: "finished", candidateText: nil)
+    )
+    let backend = makeBackend(processor: processor, policy: .disabled)
+    let recorder = EventRecorder(stream: backend.events)
+    let invocation = makeInvocation(generation: 22)
+
+    XCTAssertTrue(backend.submit(.prepare(epoch: invocation.id.epoch)))
+    _ = try await recorder.waitUntil {
+      if case .readiness(_, .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+    XCTAssertTrue(backend.submit(.begin(invocation)))
+    XCTAssertTrue(backend.submit(.finish(id: invocation.id)))
+    XCTAssertTrue(backend.submit(.append(id: invocation.id, sequence: 0, audio: Data([1, 0]))))
+    _ = try await recorder.waitUntil {
+      if case .final(id: invocation.id, _) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+
+    let appendedChunks = await processor.appendedChunks()
+    XCTAssertEqual(appendedChunks, [])
+  }
+
+  func testRepeatedPreparationReleasesSupersededModelLeases() async throws {
+    let processor = FakeFluidAudioProcessor(
+      final: FluidAudioProcessResult(rawText: "unused", candidateText: nil)
+    )
+    let primaryReleases = ReleaseRecorder()
+    let correctionReleases = ReleaseRecorder()
+    let backend = FluidAudioTranscriptionBackend(
+      context: LocalInvocationContext(permanentEntries: [
+        LocalVocabularyEntry(canonicalText: "PostgreSQL"),
+      ]),
+      correctionPolicy: .strict,
+      processor: processor,
+      acquireModels: { _, _ in
+        FluidAudioModelLease(
+          primaryDirectory: URL(fileURLWithPath: "/owned/primary"),
+          release: { await primaryReleases.record() }
+        )
+      },
+      acquireCorrection: {
+        FluidAudioCorrectionLease(
+          directory: URL(fileURLWithPath: "/owned/ctc"),
+          release: { await correctionReleases.record() }
+        )
+      }
+    )
+    let recorder = EventRecorder(stream: backend.events)
+    let epoch = TranscriptionBackendEpoch(7)
+
+    XCTAssertTrue(backend.submit(.prepare(epoch: epoch)))
+    _ = try await recorder.waitUntil {
+      if case .readiness(_, .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+    XCTAssertTrue(backend.submit(.prepare(epoch: epoch)))
+    for _ in 0 ..< 200 {
+      if await processor.prepareCount() >= 2 {
+        break
+      }
+      await Task.yield()
+    }
+
+    var primaryReleaseCount = await primaryReleases.count()
+    var correctionReleaseCount = await correctionReleases.count()
+    XCTAssertEqual(primaryReleaseCount, 1)
+    XCTAssertEqual(correctionReleaseCount, 1)
+    await backend.unload()
+    primaryReleaseCount = await primaryReleases.count()
+    correctionReleaseCount = await correctionReleases.count()
+    XCTAssertEqual(primaryReleaseCount, 2)
+    XCTAssertEqual(correctionReleaseCount, 2)
+  }
+
   func testIdleConfigurationUpdateKeepsPrimaryLoadedAndAppliesToNextInvocation() async throws {
     let processor = FakeFluidAudioProcessor(
       final: FluidAudioProcessResult(

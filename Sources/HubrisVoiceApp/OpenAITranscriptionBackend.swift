@@ -214,8 +214,20 @@ private actor OpenAITranscriptionState {
       prepare()
     case .begin(let invocation):
       guard invocation.id.epoch == epoch, invocations[invocation.id] == nil else { return }
+      guard invocation.format == .openAI else {
+        eventContinuation.yield(.failure(
+          epoch: epoch,
+          id: invocation.id,
+          failure: .init(
+            kind: .configuration,
+            message: "OpenAI transcription requires 24 kHz mono PCM16 audio.",
+            isRecoverable: false
+          )
+        ))
+        return
+      }
       invocations[invocation.id] = Invocation(value: invocation)
-      activeInputID = invocation.id
+      await activateNextInvocationIfNeeded()
     case .append(let id, let sequence, let audio):
       await append(id: id, sequence: sequence, audio: audio)
     case .finish(let id):
@@ -380,36 +392,31 @@ private actor OpenAITranscriptionState {
     invocations[id] = invocation
     guard invocation.hasAudio else {
       completeEmptyInvocation(id)
+      await activateNextInvocationIfNeeded()
       return
     }
-    if isReady {
+    if isReady, activeInputID == id {
       await commit(id)
     }
   }
 
   private func cancel(id: TranscriptionInvocationID) async {
     guard var invocation = invocations[id], !invocation.isCancelled else { return }
+    let wasActive = activeInputID == id
     invocation.isCancelled = true
-    let requiresFreshAttempt = suppressUnknownItemInference(for: invocation)
-    invocation.chunks.removeAll(keepingCapacity: false)
-    if let itemID = invocation.itemID {
-      retiredItemIDs.insert(itemID)
-    }
-    invocations[id] = invocation
-    if activeInputID == id {
-      if isReady, !requiresFreshAttempt {
-        if !client.outbound.clearAudio() {
-          await retireConnectionAfterOutboundFailure()
-          return
-        }
-      }
-      activeInputID = nil
-    }
-    if !awaitingCommits.contains(where: { $0.id == id }) {
-      invocations.removeValue(forKey: id)
+    let requiresFreshAttempt = wasActive && suppressUnknownItemInference(for: invocation)
+    _ = retire(id, suppressUnassignedItemInference: false)
+    awaitingCommits.removeAll { $0.id == id }
+    if wasActive, isReady, !requiresFreshAttempt, !invocation.isFinished,
+       !client.outbound.clearAudio()
+    {
+      await retireConnectionAfterOutboundFailure()
+      return
     }
     if requiresFreshAttempt {
       await restartConnection(message: "Reconnecting after cancelled dictation.")
+    } else {
+      await activateNextInvocationIfNeeded()
     }
   }
 
@@ -462,11 +469,11 @@ private actor OpenAITranscriptionState {
       eventContinuation.yield(.readiness(epoch: epoch, state: .ready))
       await replayLiveInvocations()
     case .server(.inputCommitted(let itemID)):
-      acknowledgeCommit(itemID: itemID)
+      await acknowledgeCommit(itemID: itemID)
     case .server(.transcriptDelta(let itemID, let delta)):
       receiveDelta(itemID: itemID, delta: delta)
     case .server(.transcriptCompleted(let itemID, let transcript)):
-      receiveCompletion(itemID: itemID, transcript: transcript)
+      await receiveCompletion(itemID: itemID, transcript: transcript)
     case .server(.error(let message, let eventID)):
       await receiveError(message: message, eventID: eventID)
     case .server(.ignored):
@@ -512,32 +519,13 @@ private actor OpenAITranscriptionState {
   }
 
   private func replayLiveInvocations() async {
-    let live = invocations.values
-      .filter { !$0.isCancelled }
-      .sorted { $0.value.id.generation < $1.value.id.generation }
-    for invocation in live {
-      if invocation.isFinished, !invocation.hasAudio {
-        completeEmptyInvocation(invocation.value.id)
-        continue
-      }
-      activeInputID = invocation.value.id
-      guard let receipt = client.outbound.replay(
-        invocation.chunks,
-        commit: invocation.isFinished
-      ) else {
-        await failFullOutboundMailbox(id: invocation.value.id)
-        return
-      }
-      if let eventID = receipt.commitEventID {
-        activeInputID = nil
-        awaitingCommits.append(.init(eventID: eventID, id: invocation.value.id))
-      }
-    }
+    await activateNextInvocationIfNeeded(replay: true)
   }
 
   private func commit(_ id: TranscriptionInvocationID) async {
-    guard let invocation = invocations[id], !invocation.isCancelled else { return }
-    activeInputID = nil
+    guard let invocation = invocations[id], !invocation.isCancelled,
+          activeInputID == id, awaitingCommits.isEmpty
+    else { return }
     guard let eventID = client.outbound.commitAudio() else {
       await failFullOutboundMailbox(id: id)
       return
@@ -579,29 +567,37 @@ private actor OpenAITranscriptionState {
     scheduleReconnect(message: message)
   }
 
-  private func acknowledgeCommit(itemID: String) {
-    assignedItemIDs.insert(itemID)
-    let bufferedPreview = bufferedProviderPreviews.removeValue(forKey: itemID)
-    guard !awaitingCommits.isEmpty else { return }
-    let pending = awaitingCommits.removeFirst()
-    guard var invocation = invocations[pending.id] else {
-      bindActiveBufferedPreviewIfUnambiguous()
+  private func acknowledgeCommit(itemID: String) async {
+    guard let pending = awaitingCommits.first,
+          awaitingCommits.count == 1,
+          activeInputID == pending.id,
+          var invocation = invocations[pending.id]
+    else {
+      await restartConnection(message: "Reconnecting after an ambiguous transcription acknowledgement.")
       return
     }
-    invocation.itemID = itemID
-    if invocation.isCancelled {
-      fencedProviderItemIDs.insert(itemID)
-      retiredItemIDs.insert(itemID)
-      invocations.removeValue(forKey: pending.id)
-    } else {
-      fencedProviderItemIDs.remove(itemID)
-      retiredItemIDs.remove(itemID)
-      invocations[pending.id] = invocation
-      if let bufferedPreview {
-        appendPreview(id: pending.id, delta: bufferedPreview.text)
-      }
+    if let existingItemID = invocation.itemID, existingItemID != itemID {
+      await restartConnection(message: "Reconnecting after an ambiguous transcription acknowledgement.")
+      return
     }
-    bindActiveBufferedPreviewIfUnambiguous()
+    guard invocation.itemID == itemID || (
+      !assignedItemIDs.contains(itemID)
+        && !retiredItemIDs.contains(itemID)
+        && !fencedProviderItemIDs.contains(itemID)
+    ) else {
+      await restartConnection(message: "Reconnecting after an ambiguous transcription acknowledgement.")
+      return
+    }
+    awaitingCommits.removeFirst()
+    assignedItemIDs.insert(itemID)
+    let bufferedPreview = bufferedProviderPreviews.removeValue(forKey: itemID)
+    invocation.itemID = itemID
+    fencedProviderItemIDs.remove(itemID)
+    retiredItemIDs.remove(itemID)
+    invocations[pending.id] = invocation
+    if let bufferedPreview {
+      appendPreview(id: pending.id, delta: bufferedPreview.text)
+    }
   }
 
   private func receiveDelta(itemID: String, delta: String) {
@@ -673,15 +669,17 @@ private actor OpenAITranscriptionState {
     eventContinuation.yield(.preview(id: id, text: invocation.preview))
   }
 
-  private func receiveCompletion(itemID: String, transcript: String) {
+  private func receiveCompletion(itemID: String, transcript: String) async {
     guard !retiredItemIDs.contains(itemID),
           let id = invocations.first(where: { $0.value.itemID == itemID && !$0.value.isCancelled })?.key
     else { return }
+    awaitingCommits.removeAll { $0.id == id }
     retire(id)
     eventContinuation.yield(.final(
       id: id,
       result: .init(text: transcript, correction: .disabled)
     ))
+    await activateNextInvocationIfNeeded()
   }
 
   private func receiveError(message: String, eventID: String?) async {
@@ -700,6 +698,8 @@ private actor OpenAITranscriptionState {
       ))
       if requiresFreshAttempt {
         await restartConnection(message: "Reconnecting after a transcription error.")
+      } else {
+        await activateNextInvocationIfNeeded()
       }
       return
     }
@@ -707,11 +707,49 @@ private actor OpenAITranscriptionState {
       pendingConfigurationAcknowledgements = 0
       configurationContinuation.yield(.failed(message))
     }
-    eventContinuation.yield(.failure(
-      epoch: epoch,
-      id: nil,
-      failure: .init(kind: .transport, message: message, isRecoverable: true)
-    ))
+    if let activeInputID, !awaitingCommits.isEmpty {
+      _ = retire(activeInputID)
+      awaitingCommits.removeAll()
+      eventContinuation.yield(.failure(
+        epoch: epoch,
+        id: activeInputID,
+        failure: .init(kind: .transcription, message: message, isRecoverable: false)
+      ))
+      await restartConnection(message: "Reconnecting after an uncorrelated transcription error.")
+    } else {
+      eventContinuation.yield(.failure(
+        epoch: epoch,
+        id: nil,
+        failure: .init(kind: .transport, message: message, isRecoverable: true)
+      ))
+    }
+  }
+
+  private func activateNextInvocationIfNeeded(replay: Bool = false) async {
+    guard isReady, activeInputID == nil else { return }
+    while let invocation = invocations.values
+      .filter({ !$0.isCancelled })
+      .min(by: { $0.value.id.generation < $1.value.id.generation })
+    {
+      if invocation.isFinished, !invocation.hasAudio {
+        completeEmptyInvocation(invocation.value.id)
+        continue
+      }
+      activeInputID = invocation.value.id
+      if replay || !invocation.chunks.isEmpty {
+        guard let receipt = client.outbound.replay(
+          invocation.chunks,
+          commit: invocation.isFinished
+        ) else {
+          await failFullOutboundMailbox(id: invocation.value.id)
+          return
+        }
+        if let eventID = receipt.commitEventID {
+          awaitingCommits.append(.init(eventID: eventID, id: invocation.value.id))
+        }
+      }
+      return
+    }
   }
 
   private func resetWireCorrelationForReplay() {
@@ -733,9 +771,12 @@ private actor OpenAITranscriptionState {
         retiredItemIDs.insert(itemID)
       }
       invocation.itemID = nil
+      let hadPreview = !invocation.preview.isEmpty
       invocation.preview = ""
       invocations[id] = invocation
-      eventContinuation.yield(.preview(id: id, text: ""))
+      if hadPreview {
+        eventContinuation.yield(.preview(id: id, text: ""))
+      }
     }
   }
 

@@ -291,10 +291,14 @@ private actor FluidAudioTranscriptionState {
       await lease.release()
       return
     }
+    let previousLease = self.lease
+    let previousCorrectionLease = self.correctionLease
     self.lease = lease
     self.correctionLease = correctionLease
     isPrepared = true
     preparationTask = nil
+    await previousCorrectionLease?.release()
+    await previousLease?.release()
     events.yield(.readiness(epoch: epoch, state: .ready))
     pump()
   }
@@ -325,7 +329,9 @@ private actor FluidAudioTranscriptionState {
   }
 
   private func begin(_ invocation: TranscriptionInvocation) {
-    guard invocation.id.epoch == epoch, invocations[invocation.id] == nil else { return }
+    guard invocation.id.epoch == epoch, invocations[invocation.id] == nil,
+          !retired.contains(invocation.id)
+    else { return }
     guard invocation.format == .local else {
       retired.insert(invocation.id)
       fail(invocation.id, kind: .configuration, message: "Local transcription requires 16 kHz mono PCM16 audio.")
@@ -342,7 +348,9 @@ private actor FluidAudioTranscriptionState {
   }
 
   private func append(id invocationID: TranscriptionInvocationID, sequence: Int, audio: Data) {
-    guard var invocation = invocations[invocationID], !retired.contains(invocationID) else { return }
+    guard var invocation = invocations[invocationID], !retired.contains(invocationID),
+          !invocation.finishRequested
+    else { return }
     guard sequence == invocation.nextSequence else {
       retire(invocationID)
       fail(invocationID, kind: .capture, message: "Local audio arrived out of order.")

@@ -259,7 +259,8 @@ and milestone 1 identity/readiness contracts are settled.
   required files validate. An interrupted or corrupt installation is not ready.
 - Reuse completed verified artifacts on retry; resuming individual partial files
   is optional. Handle disk-full and failed verification without clobbering the
-  last usable installation. Startup reconciles durable files and manifest state.
+  last usable installation. Startup verifies the catalog's owned directories,
+  regular-file boundaries, sizes, and pinned hashes before reporting readiness.
 - Track dependencies shared by the app's own catalog. Unload before deleting
   loaded assets; defer deletion while a generation is using them. Imported or
   SDK-shared assets stay read-only unless ownership is explicitly established.

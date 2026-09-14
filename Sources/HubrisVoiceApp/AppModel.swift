@@ -640,22 +640,37 @@ final class AppModel: ObservableObject {
     }
     configurationUpdateDeferred = false
     configurationState = .pending
+    let configurationEpoch = engine.epoch
     if configurationNeedsReconnect {
       configurationNeedsReconnect = false
       pendingConfigurationAcks = 0
       let configuration = settings.sessionConfiguration
       Task { [weak self, backend] in
         let sent = await backend.updateConfiguration(configuration, reconnect: true)
-        guard let self, !sent else { return }
+        guard let self, AppModelCoordinationPolicy.acceptsConfigurationCompletion(
+          capturedBackendID: ObjectIdentifier(backend),
+          currentBackendID: self.backend.map(ObjectIdentifier.init),
+          capturedEpoch: configurationEpoch,
+          currentEpoch: engine.epoch
+        ),
+          !sent
+        else { return }
         configurationUpdateDeferred = true
       }
       return
     }
     pendingConfigurationAcks += 1
     let configuration = settings.sessionConfiguration
-    Task { [weak self] in
-      guard let self, let backend = self.backend else { return }
+    Task { [weak self, backend] in
       let sent = await backend.updateConfiguration(configuration, reconnect: false)
+      guard let self, AppModelCoordinationPolicy.acceptsConfigurationCompletion(
+        capturedBackendID: ObjectIdentifier(backend),
+        currentBackendID: self.backend.map(ObjectIdentifier.init),
+        capturedEpoch: configurationEpoch,
+        currentEpoch: engine.epoch
+      ) else {
+        return
+      }
       if !sent {
         configurationUpdateDeferred = true
         pendingConfigurationAcks = max(
@@ -797,7 +812,7 @@ final class AppModel: ObservableObject {
       updateHistory(id: entryID, outcome: outcome)
       return entryID
     }
-    guard activeEngine == .openAI, !snippet.transcript.isEmpty else { return nil }
+    guard !snippet.transcript.isEmpty else { return nil }
     return recordTranscript(
       generation: snippet.generation,
       text: snippet.transcript,
@@ -1497,7 +1512,7 @@ private extension AppModel {
     prepareSelectedEngine()
   }
 
-  // swiftlint:disable:next cyclomatic_complexity function_body_length
+  // swiftlint:disable:next function_body_length
   func replaceSelectedEngine(prewarm: Bool = true) async {
     guard isQuiescent, !changingEngine else { return }
     changingEngine = true
@@ -1509,7 +1524,7 @@ private extension AppModel {
     if prewarm, selection == .fluidAudio, activeEngine == .fluidAudio,
        localModels.modelID == LocalModelCatalog.primaryID, let localBackend
     {
-      let configurationResult: AppModelCoordinationPolicy.LocalConfigurationResult
+      var configurationResult = AppModelCoordinationPolicy.LocalConfigurationResult.requiresFullReplacement
       do {
         configurationResult = try await AppModelCoordinationPolicy.applyLocalConfiguration {
           try await localBackend.updateConfiguration(
@@ -1523,13 +1538,9 @@ private extension AppModel {
         localModels.isDictating = false
         return
       } catch {
-        changingEngine = false
-        localModels.isDictating = false
         localModels.message = "The local transcription settings could not be applied."
-        if localModels.pendingConfiguration {
-          await replaceSelectedEngine()
-        }
-        return
+        // The in-place backend may still hold its previous configuration. Fall
+        // through to replacement so new dictations cannot use stale settings.
       }
       if configurationResult == .applied {
         activeLocalEntries = context.permanentEntries

@@ -24,6 +24,15 @@ enum AppModelCoordinationPolicy {
     !changingEngine && !pendingConfiguration
   }
 
+  static func acceptsConfigurationCompletion(
+    capturedBackendID: ObjectIdentifier,
+    currentBackendID: ObjectIdentifier?,
+    capturedEpoch: TranscriptionBackendEpoch,
+    currentEpoch: TranscriptionBackendEpoch
+  ) -> Bool {
+    capturedBackendID == currentBackendID && capturedEpoch == currentEpoch
+  }
+
   static func shouldStartCapture(
     _ invocation: TranscriptionInvocation,
     session: DictationSession
