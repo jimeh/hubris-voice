@@ -401,6 +401,64 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
     XCTAssertEqual(correctionReleaseCount, 2)
   }
 
+  func testUnloadCancelsAndAwaitsInFlightConfigurationUpdate() async throws {
+    let processor = FakeFluidAudioProcessor(
+      final: FluidAudioProcessResult(rawText: "unused", candidateText: nil)
+    )
+    let primaryReleases = ReleaseRecorder()
+    let correctionReleases = ReleaseRecorder()
+    let backend = FluidAudioTranscriptionBackend(
+      context: .init(permanentEntries: []),
+      correctionPolicy: .disabled,
+      processor: processor,
+      acquireModels: { _, _ in
+        FluidAudioModelLease(
+          primaryDirectory: URL(fileURLWithPath: "/owned/primary"),
+          release: { await primaryReleases.record() }
+        )
+      },
+      acquireCorrection: {
+        FluidAudioCorrectionLease(
+          directory: URL(fileURLWithPath: "/owned/ctc"),
+          release: { await correctionReleases.record() }
+        )
+      }
+    )
+    let recorder = EventRecorder(stream: backend.events)
+    let epoch = TranscriptionBackendEpoch(9)
+
+    XCTAssertTrue(backend.submit(.prepare(epoch: epoch)))
+    _ = try await recorder.waitUntil {
+      if case .readiness(_, .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+    await processor.blockNextPrepare()
+    let updateTask = Task {
+      try await backend.updateConfiguration(
+        context: LocalInvocationContext(permanentEntries: [
+          LocalVocabularyEntry(canonicalText: "PostgreSQL"),
+        ]),
+        correctionPolicy: .strict
+      )
+    }
+    try await processor.waitForPrepareCount(2)
+
+    let unloadTask = Task { await backend.unload() }
+    try await processor.waitForPrepareCancellation()
+    await processor.releasePrepare()
+    let updated = try await updateTask.value
+    await unloadTask.value
+
+    XCTAssertFalse(updated)
+    let primaryReleaseCount = await primaryReleases.count()
+    let correctionReleaseCount = await correctionReleases.count()
+    XCTAssertEqual(primaryReleaseCount, 1)
+    XCTAssertEqual(correctionReleaseCount, 1)
+  }
+
   func testIdleConfigurationUpdateKeepsPrimaryLoadedAndAppliesToNextInvocation() async throws {
     let processor = FakeFluidAudioProcessor(
       final: FluidAudioProcessResult(
@@ -883,6 +941,7 @@ private actor FakeFluidAudioProcessor: FluidAudioProcessing {
   private var finishStarted = false
   private var finishCancelled = false
   private var prepareStarted = false
+  private var prepareCancellationObserved = false
   private var prepareContinuation: CheckedContinuation<Void, Error>?
   private var finishContinuation: CheckedContinuation<Void, Error>?
   private var preparedPrimaryDirectory: URL?
@@ -922,8 +981,12 @@ private actor FakeFluidAudioProcessor: FluidAudioProcessing {
       primaryLoads += 1
     }
     if shouldBlockPrepare {
-      try await withCheckedThrowingContinuation { continuation in
-        prepareContinuation = continuation
+      try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { continuation in
+          prepareContinuation = continuation
+        }
+      } onCancel: {
+        Task { await self.recordPrepareCancellation() }
       }
     }
     if shouldFailPrepare {
@@ -978,11 +1041,34 @@ private actor FakeFluidAudioProcessor: FluidAudioProcessing {
     shouldFailPrepare = true
   }
 
+  func blockNextPrepare() {
+    shouldBlockPrepare = true
+    prepareCancellationObserved = false
+  }
+
   func waitForPrepare() async throws {
     for _ in 0 ..< 200 where !prepareStarted {
       try await Task.sleep(for: .milliseconds(5))
     }
     guard prepareStarted else { throw TestWaitError.timedOut }
+  }
+
+  func waitForPrepareCount(_ expectedCount: Int) async throws {
+    for _ in 0 ..< 200 where preparations < expectedCount {
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    guard preparations >= expectedCount else { throw TestWaitError.timedOut }
+  }
+
+  func waitForPrepareCancellation() async throws {
+    for _ in 0 ..< 200 where !prepareCancellationObserved {
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    guard prepareCancellationObserved else { throw TestWaitError.timedOut }
+  }
+
+  private func recordPrepareCancellation() {
+    prepareCancellationObserved = true
   }
 
   func waitForFinish() async throws {
