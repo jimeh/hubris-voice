@@ -16,8 +16,8 @@ and model-management UI. Final behavior and validation limits are recorded in
 Add an explicitly selectable offline transcription backend to the existing
 push-to-talk flow. Start with FluidAudio and Parakeet Unified English 0.6B at
 320 ms, using the tested strict dictionary settings and spoken aliases. Dictionary
-correction starts disabled and is opt-in. Installed local dictation must work
-without network access or an OpenAI API key. Existing users retain their cloud
+correction defaults to enabled; users can disable it. Installed local dictation
+must work without network access or an OpenAI API key. Existing users retain their cloud
 selection and behavior until they choose otherwise. OpenAI also remains the
 default for new installations.
 
@@ -323,9 +323,9 @@ Owner: parent, with bounded Sol implementation tasks for confirmed defects.
   delay definitions; avoid treating process RSS as total accelerator memory.
 
 Exit: a working selectable local backend with verified model management and a
-written account of remaining manual gaps. Keep correction opt-in until fresh
-dictation evidence supports a different default. Update README and affected
-reference docs to describe final behavior, not this proposed sequence.
+written account of remaining manual gaps. Following successful manual dictation
+testing, correction defaults to enabled at the user's request. Update README and
+affected reference docs to describe final behavior, not this proposed sequence.
 
 ## Implementor delegation protocol
 

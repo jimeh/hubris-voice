@@ -62,7 +62,9 @@ enum AppModelCoordinationPolicy {
     precondition(maximumAttempts > 0)
     for attempt in 1 ... maximumAttempts {
       try Task.checkCancellation()
-      if try await update() {
+      let applied = try await update()
+      try Task.checkCancellation()
+      if applied {
         return .applied
       }
       if attempt < maximumAttempts {

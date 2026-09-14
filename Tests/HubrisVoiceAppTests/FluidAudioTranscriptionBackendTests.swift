@@ -334,6 +334,117 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
     XCTAssertEqual(latestContext, updatedContext)
   }
 
+  func testDisablingCorrectionReleasesSupplementalLeaseAfterSuccessfulPrepare() async throws {
+    let processor = FakeFluidAudioProcessor(
+      final: FluidAudioProcessResult(rawText: "unused", candidateText: nil)
+    )
+    let releases = ReleaseRecorder()
+    let backend = FluidAudioTranscriptionBackend(
+      context: LocalInvocationContext(permanentEntries: []),
+      correctionPolicy: .disabled,
+      processor: processor,
+      acquireModels: { _, _ in
+        FluidAudioModelLease(
+          primaryDirectory: URL(fileURLWithPath: "/owned/primary"),
+          release: {}
+        )
+      },
+      acquireCorrection: {
+        FluidAudioCorrectionLease(
+          directory: URL(fileURLWithPath: "/owned/ctc"),
+          release: { await releases.record() }
+        )
+      }
+    )
+    let recorder = EventRecorder(stream: backend.events)
+    let invocation = makeInvocation(generation: 12)
+    XCTAssertTrue(backend.submit(.prepare(epoch: invocation.id.epoch)))
+    _ = try await recorder.waitUntil {
+      if case .readiness(_, .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+    let enabled = try await updateConfiguration(backend, entries: ["user_id"], policy: .strict)
+    let enabledDirectory = await processor.latestCorrectionDirectory()
+    let releasesAfterEnable = await releases.count()
+    XCTAssertTrue(enabled)
+    XCTAssertEqual(enabledDirectory, URL(fileURLWithPath: "/owned/ctc"))
+    XCTAssertEqual(releasesAfterEnable, 0)
+
+    await processor.failNextPrepare()
+    do {
+      _ = try await updateConfiguration(backend, entries: [], policy: .strict)
+      XCTFail("Expected configuration update failure")
+    } catch is TranscriptionFailure {}
+    let releasesAfterFailure = await releases.count()
+    XCTAssertEqual(releasesAfterFailure, 0)
+
+    let emptied = try await updateConfiguration(backend, entries: [], policy: .strict)
+    let emptiedDirectory = await processor.latestCorrectionDirectory()
+    let releasesAfterEmpty = await releases.count()
+    XCTAssertTrue(emptied)
+    XCTAssertNil(emptiedDirectory)
+    XCTAssertEqual(releasesAfterEmpty, 1)
+
+    let reenabled = try await updateConfiguration(backend, entries: ["user_id"], policy: .strict)
+    let releasesAfterReenable = await releases.count()
+    XCTAssertTrue(reenabled)
+    XCTAssertEqual(releasesAfterReenable, 1)
+
+    let disabled = try await updateConfiguration(backend, entries: ["user_id"], policy: .disabled)
+    let disabledDirectory = await processor.latestCorrectionDirectory()
+    let releasesAfterDisable = await releases.count()
+    XCTAssertTrue(disabled)
+    XCTAssertNil(disabledDirectory)
+    XCTAssertEqual(releasesAfterDisable, 2)
+    await backend.unload()
+    let releasesAfterUnload = await releases.count()
+    XCTAssertEqual(releasesAfterUnload, 2)
+  }
+
+  func testDisablingInitiallyLoadedCorrectionReleasesItButRetainsPrimary() async throws {
+    let processor = FakeFluidAudioProcessor(
+      final: FluidAudioProcessResult(rawText: "unused", candidateText: nil)
+    )
+    let primaryReleases = ReleaseRecorder()
+    let correctionReleases = ReleaseRecorder()
+    let backend = makeBackend(
+      processor: processor,
+      policy: .strict,
+      release: { await primaryReleases.record() },
+      correctionRelease: { await correctionReleases.record() }
+    )
+    let recorder = EventRecorder(stream: backend.events)
+    let invocation = makeInvocation(generation: 13)
+    XCTAssertTrue(backend.submit(.prepare(epoch: invocation.id.epoch)))
+    _ = try await recorder.waitUntil {
+      if case .readiness(_, .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+
+    let loadedDirectory = await processor.latestCorrectionDirectory()
+    XCTAssertEqual(loadedDirectory, URL(fileURLWithPath: "/owned/ctc"))
+
+    let disabled = try await updateConfiguration(backend, entries: ["user_id"], policy: .disabled)
+    let correctionDirectory = await processor.latestCorrectionDirectory()
+    let primaryReleasesAfterDisable = await primaryReleases.count()
+    let correctionReleasesAfterDisable = await correctionReleases.count()
+    XCTAssertTrue(disabled)
+    XCTAssertNil(correctionDirectory)
+    XCTAssertEqual(primaryReleasesAfterDisable, 0)
+    XCTAssertEqual(correctionReleasesAfterDisable, 1)
+    await backend.unload()
+    let primaryReleasesAfterUnload = await primaryReleases.count()
+    let correctionReleasesAfterUnload = await correctionReleases.count()
+    XCTAssertEqual(primaryReleasesAfterUnload, 1)
+    XCTAssertEqual(correctionReleasesAfterUnload, 1)
+  }
+
   func testConfigurationUpdateFailureThrowsSanitizedErrorAndRestoresPolicy() async throws {
     let processor = FakeFluidAudioProcessor(
       final: FluidAudioProcessResult(
@@ -509,6 +620,7 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
     processor: FakeFluidAudioProcessor,
     policy: LocalCorrectionPolicy,
     release: @escaping @Sendable () async -> Void = {},
+    correctionRelease: @escaping @Sendable () async -> Void = {},
     context: LocalInvocationContext = LocalInvocationContext(permanentEntries: [
       LocalVocabularyEntry(canonicalText: "user_id"),
     ])
@@ -517,11 +629,16 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
       context: context,
       correctionPolicy: policy,
       processor: processor,
-      acquireModels: { _, currentPolicy in
+      acquireModels: { _, _ in
         FluidAudioModelLease(
           primaryDirectory: URL(fileURLWithPath: "/owned/primary"),
-          correctionDirectory: currentPolicy == .strict ? URL(fileURLWithPath: "/owned/ctc") : nil,
           release: release
+        )
+      },
+      acquireCorrection: {
+        FluidAudioCorrectionLease(
+          directory: URL(fileURLWithPath: "/owned/ctc"),
+          release: correctionRelease
         )
       }
     )
@@ -533,6 +650,19 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
       format: .local
     )
   }
+}
+
+private func updateConfiguration(
+  _ backend: FluidAudioTranscriptionBackend,
+  entries: [String],
+  policy: LocalCorrectionPolicy
+) async throws -> Bool {
+  try await backend.updateConfiguration(
+    context: LocalInvocationContext(permanentEntries: entries.map {
+      LocalVocabularyEntry(canonicalText: $0)
+    }),
+    correctionPolicy: policy
+  )
 }
 
 private actor FakeFluidAudioProcessor: FluidAudioProcessing {
@@ -550,6 +680,7 @@ private actor FakeFluidAudioProcessor: FluidAudioProcessing {
   private var preparations = 0
   private var primaryLoads = 0
   private var currentContext: LocalInvocationContext?
+  private var currentCorrectionDirectory: URL?
   private var resets = 0
   private var chunks: [Data] = []
 
@@ -569,13 +700,14 @@ private actor FakeFluidAudioProcessor: FluidAudioProcessing {
 
   func prepare(
     primaryDirectory: URL,
-    correctionDirectory _: URL?,
+    correctionDirectory: URL?,
     context: LocalInvocationContext,
     correctionPolicy _: LocalCorrectionPolicy
   ) async throws {
     prepareStarted = true
     preparations += 1
     currentContext = context
+    currentCorrectionDirectory = correctionDirectory
     if preparedPrimaryDirectory != primaryDirectory {
       preparedPrimaryDirectory = primaryDirectory
       primaryLoads += 1
@@ -672,6 +804,10 @@ private actor FakeFluidAudioProcessor: FluidAudioProcessing {
 
   func latestContext() -> LocalInvocationContext? {
     currentContext
+  }
+
+  func latestCorrectionDirectory() -> URL? {
+    currentCorrectionDirectory
   }
 
   func appendedChunks() -> [Data] {

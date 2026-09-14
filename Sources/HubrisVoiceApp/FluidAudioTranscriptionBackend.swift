@@ -17,20 +17,11 @@ final class FluidAudioTranscriptionBackend: TranscriptionEngineRuntime, @uncheck
       context: context,
       correctionPolicy: correctionPolicy,
       processor: FluidAudioProcessor(),
-      acquireModels: { context, correctionPolicy in
+      acquireModels: { _, _ in
         let primary = try await store.acquire(LocalModelCatalog.primaryID)
-        let correction = correctionPolicy == .strict && !context.resolvedEntries.isEmpty
-          ? try? await store.acquire(LocalModelCatalog.correctionID)
-          : nil
         return FluidAudioModelLease(
           primaryDirectory: primary.directory,
-          correctionDirectory: correction?.directory,
-          release: {
-            await store.release(primary)
-            if let correction {
-              await store.release(correction)
-            }
-          }
+          release: { await store.release(primary) }
         )
       },
       acquireCorrection: {
@@ -93,7 +84,6 @@ final class FluidAudioTranscriptionBackend: TranscriptionEngineRuntime, @uncheck
 
 struct FluidAudioModelLease: Sendable {
   let primaryDirectory: URL
-  let correctionDirectory: URL?
   let release: @Sendable () async -> Void
 }
 
@@ -104,7 +94,6 @@ struct FluidAudioCorrectionLease: Sendable {
 
 private actor FluidAudioTranscriptionState {
   private struct Invocation {
-    let value: TranscriptionInvocation
     var nextSequence = 0
     var audioBytes = 0
     var chunks: [Data] = []
@@ -125,7 +114,7 @@ private actor FluidAudioTranscriptionState {
   private let events: AsyncStream<TranscriptionEngineEvent>.Continuation
   private var epoch = TranscriptionBackendEpoch(0)
   private var lease: FluidAudioModelLease?
-  private var supplementalCorrectionLease: FluidAudioCorrectionLease?
+  private var correctionLease: FluidAudioCorrectionLease?
   private var isPrepared = false
   private var isReconfiguring = false
   private var preparationTask: Task<Void, Never>?
@@ -184,9 +173,9 @@ private actor FluidAudioTranscriptionState {
       await lease.release()
       self.lease = nil
     }
-    if let supplementalCorrectionLease {
-      await supplementalCorrectionLease.release()
-      self.supplementalCorrectionLease = nil
+    if let correctionLease {
+      await correctionLease.release()
+      self.correctionLease = nil
     }
   }
 
@@ -211,20 +200,24 @@ private actor FluidAudioTranscriptionState {
 
     isReconfiguring = true
     isPrepared = false
-    if correctionPolicy == .strict,
-       !context.resolvedEntries.isEmpty,
-       lease.correctionDirectory == nil,
-       supplementalCorrectionLease == nil
-    {
-      supplementalCorrectionLease = try? await acquireCorrection()
+    let needsCorrection = correctionPolicy == .strict && !context.resolvedEntries.isEmpty
+    if needsCorrection, correctionLease == nil {
+      correctionLease = try? await acquireCorrection()
     }
     do {
+      let correctionDirectory = needsCorrection
+        ? correctionLease?.directory
+        : nil
       try await processor.prepare(
         primaryDirectory: lease.primaryDirectory,
-        correctionDirectory: lease.correctionDirectory ?? supplementalCorrectionLease?.directory,
+        correctionDirectory: correctionDirectory,
         context: context,
         correctionPolicy: correctionPolicy
       )
+      if !needsCorrection, let correctionLease {
+        self.correctionLease = nil
+        await correctionLease.release()
+      }
       isPrepared = true
       isReconfiguring = false
       pump()
@@ -248,23 +241,31 @@ private actor FluidAudioTranscriptionState {
     preparationTask?.cancel()
     let context = context
     let correctionPolicy = correctionPolicy
-    preparationTask = Task { [weak self, acquireModels, context, correctionPolicy, processor] in
+    preparationTask = Task { [weak self, acquireModels, acquireCorrection, context, correctionPolicy, processor] in
       do {
         let lease = try await acquireModels(context, correctionPolicy)
+        let needsCorrection = correctionPolicy == .strict && !context.resolvedEntries.isEmpty
+        let correctionLease = needsCorrection ? try? await acquireCorrection() : nil
         do {
           try Task.checkCancellation()
           try await processor.prepare(
             primaryDirectory: lease.primaryDirectory,
-            correctionDirectory: lease.correctionDirectory,
+            correctionDirectory: correctionLease?.directory,
             context: context,
             correctionPolicy: correctionPolicy
           )
           try Task.checkCancellation()
         } catch {
+          await correctionLease?.release()
           await lease.release()
           throw error
         }
-        await self?.prepared(lease: lease, epoch: epoch)
+        guard let self else {
+          await correctionLease?.release()
+          await lease.release()
+          return
+        }
+        await prepared(lease: lease, correctionLease: correctionLease, epoch: epoch)
       } catch is CancellationError {
         return
       } catch {
@@ -273,12 +274,18 @@ private actor FluidAudioTranscriptionState {
     }
   }
 
-  private func prepared(lease: FluidAudioModelLease, epoch: TranscriptionBackendEpoch) async {
+  private func prepared(
+    lease: FluidAudioModelLease,
+    correctionLease: FluidAudioCorrectionLease?,
+    epoch: TranscriptionBackendEpoch
+  ) async {
     guard self.epoch == epoch else {
+      await correctionLease?.release()
       await lease.release()
       return
     }
     self.lease = lease
+    self.correctionLease = correctionLease
     isPrepared = true
     preparationTask = nil
     events.yield(.readiness(epoch: epoch, state: .ready))
@@ -322,7 +329,7 @@ private actor FluidAudioTranscriptionState {
       fail(invocation.id, kind: .capture, message: "Too many local snippets are pending.")
       return
     }
-    invocations[invocation.id] = Invocation(value: invocation)
+    invocations[invocation.id] = Invocation()
     order.append(invocation.id)
     pump()
   }

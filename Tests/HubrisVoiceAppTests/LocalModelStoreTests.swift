@@ -257,6 +257,18 @@ private struct OwnedParentSymlinkFixture {
 }
 
 private struct Fixture {
+  static let model: LocalModelDefinition = {
+    let artifacts = ["first", "second"].map { name in
+      LocalModelArtifact(
+        relativePath: name, byteCount: Int64(name.utf8.count),
+        sha256: SHA256.hash(data: Data(name.utf8)).map { String(format: "%02x", $0) }.joined()
+      )
+    }
+    return LocalModelDefinition(
+      id: "test", title: "Test", repository: "test/model", revision: "immutable", license: "Test", artifacts: artifacts
+    )
+  }()
+
   let root: URL
   var modelRoot: URL {
     root.appendingPathComponent("Models")
@@ -279,34 +291,16 @@ private struct Fixture {
     downloader: FixtureDownloader? = nil,
     fileManager: any LocalModelFileManaging = LocalModelFileManager()
   ) -> LocalModelStore {
-    let artifacts = ["first", "second"].map { name in
-      LocalModelArtifact(
-        relativePath: name, byteCount: Int64(name.utf8.count),
-        sha256: SHA256.hash(data: Data(name.utf8)).map { String(format: "%02x", $0) }.joined()
-      )
-    }
-    let model = LocalModelDefinition(
-      id: "test", title: "Test", repository: "test/model", revision: "immutable", license: "Test", artifacts: artifacts
-    )
-    return LocalModelStore(
+    LocalModelStore(
       root: modelRoot,
-      catalog: [model],
+      catalog: [Self.model],
       downloader: downloader ?? FixtureDownloader(root: downloadRoot),
       fileManager: fileManager
     )
   }
 
   static func store(root: URL) -> LocalModelStore {
-    let artifacts = ["first", "second"].map { name in
-      LocalModelArtifact(
-        relativePath: name, byteCount: Int64(name.utf8.count),
-        sha256: SHA256.hash(data: Data(name.utf8)).map { String(format: "%02x", $0) }.joined()
-      )
-    }
-    let model = LocalModelDefinition(
-      id: "test", title: "Test", repository: "test/model", revision: "immutable", license: "Test", artifacts: artifacts
-    )
-    return LocalModelStore(root: root, catalog: [model], downloader: FixtureDownloader(root: root))
+    LocalModelStore(root: root, catalog: [model], downloader: FixtureDownloader(root: root))
   }
 }
 

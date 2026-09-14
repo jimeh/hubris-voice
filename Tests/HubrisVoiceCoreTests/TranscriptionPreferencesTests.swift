@@ -2,10 +2,30 @@ import HubrisVoiceCore
 import XCTest
 
 final class TranscriptionPreferencesTests: XCTestCase {
-  func testDefaultsKeepOpenAIAndCorrectionOff() {
+  func testDefaultsKeepOpenAIAndEnableLocalCorrection() {
     let preferences = TranscriptionPreferences.load(from: PreferenceStore())
     XCTAssertEqual(preferences.engine, .openAI)
-    XCTAssertFalse(preferences.correctionEnabled)
+    XCTAssertTrue(preferences.correctionEnabled)
+  }
+
+  func testLocalCorrectionDefaultsOnWithoutSavedPreference() {
+    let store = PreferenceStore()
+    store.set(TranscriptionEngineSelection.fluidAudio.rawValue, for: TranscriptionPreferences.Key.engine)
+    XCTAssertTrue(TranscriptionPreferences.load(from: store).correctionEnabled)
+    XCTAssertTrue(TranscriptionPreferences(engine: .fluidAudio).correctionEnabled)
+  }
+
+  func testExplicitlyDisabledCorrectionSurvivesEngineSwitches() {
+    let store = PreferenceStore()
+    var preferences = TranscriptionPreferences(engine: .fluidAudio, correctionEnabled: false)
+    preferences.save(to: store)
+    preferences = TranscriptionPreferences.load(from: store)
+    preferences.engine = .openAI
+    preferences.save(to: store)
+    preferences = TranscriptionPreferences.load(from: store)
+    preferences.engine = .fluidAudio
+    preferences.save(to: store)
+    XCTAssertFalse(TranscriptionPreferences.load(from: store).correctionEnabled)
   }
 
   func testValidEngineSelectionIsLoaded() {

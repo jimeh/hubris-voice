@@ -43,6 +43,34 @@ final class DictationSessionTests: XCTestCase {
     }
   }
 
+  func testUnavailableReadinessStopsLockedCaptureAndPreservesPreview() throws {
+    var session = readySession(configuration: .init(tapToLock: true))
+    _ = session.transition(.pressed)
+    let invocationID = try XCTUnwrap(session.listening?.id)
+    _ = session.transition(.engine(.preview(id: invocationID, text: "recover locked")))
+    _ = session.transition(.released(heldDuration: 0.1))
+    XCTAssertTrue(session.isLocked)
+
+    XCTAssertEqual(
+      session.transition(.engine(.readiness(
+        epoch: invocationID.epoch,
+        state: .unavailable(reason: "Connection unavailable.", action: "Reconnect.")
+      ))),
+      [
+        .stopCapture(generation: invocationID.generation),
+        .cancelTranscription(id: invocationID),
+        .discardSnippet(generation: invocationID.generation),
+        .scheduleDismiss(after: .seconds(4)),
+      ]
+    )
+    XCTAssertNil(session.listening)
+    XCTAssertFalse(session.isLocked)
+    XCTAssertEqual(
+      session.presented,
+      .error(message: "Connection unavailable. Reconnect.", text: "recover locked")
+    )
+  }
+
   func testReleasePreservesEightSecondDeadlineAndFinishesAfterStop() throws {
     var session = readySession()
     _ = session.transition(.pressed)

@@ -692,12 +692,16 @@ final class AppModel: ObservableObject {
       updateHistory(id: entryID, outcome: outcome.historyOutcome)
       presentedHistoryEntryID = outcome == .rejected ? entryID : nil
     case .engine(.failure(_, let invocationID?, _)):
-      let generation = invocationID.generation
-      guard let snippet = session.pending.first(where: { $0.generation == generation }) else { return nil }
+      let snippet = activeSnippet(matching: invocationID)
+      guard let snippet else { return nil }
       presentedHistoryEntryID = recordUnfinishedTranscript(
         snippet,
         outcome: .rejected
       )
+    case .engine(.readiness(_, .unavailable)):
+      if let listening = session.listening {
+        presentedHistoryEntryID = recordCancelledTranscript(listening)
+      }
     case .finalizingTimedOut(let generation):
       guard
         let snippet = session.pending.first(where: { $0.generation == generation }),
@@ -727,11 +731,7 @@ final class AppModel: ObservableObject {
         presentedHistoryEntryID = recordCancelledTranscript(listening)
       }
     case .commandRejected(let invocationID, _):
-      let snippet = if session.listening?.id == invocationID {
-        session.listening
-      } else {
-        session.pending.first(where: { $0.id == invocationID })
-      }
+      let snippet = activeSnippet(matching: invocationID)
       guard let snippet else { return nil }
       presentedHistoryEntryID = recordCancelledTranscript(snippet)
     case .engine(.failure(_, nil, _)):
@@ -746,6 +746,16 @@ final class AppModel: ObservableObject {
       break
     }
     return nil
+  }
+
+  private func activeSnippet(
+    matching invocationID: TranscriptionInvocationID
+  ) -> DictationSession.Snippet? {
+    if session.listening?.id == invocationID {
+      session.listening
+    } else {
+      session.pending.first(where: { $0.id == invocationID })
+    }
   }
 
   @discardableResult
@@ -1335,6 +1345,10 @@ final class AppModel: ObservableObject {
   ) {
     apply(.commandRejected(id: invocationID, message: message))
   }
+
+  func testingHandleEngineEvent(_ event: TranscriptionEngineEvent) {
+    handleEngineEvent(event)
+  }
 }
 
 private extension ShortcutSet {
@@ -1419,21 +1433,21 @@ private extension AppModel {
   func loadLocalModel() {
     guard activeEngine == .fluidAudio, !changingEngine else { return }
     guard localModels.modelID == LocalModelCatalog.primaryID else {
-      apply(.engine(.readiness(epoch: engine.epoch, state: .unavailable(
+      handleEngineEvent(.readiness(epoch: engine.epoch, state: .unavailable(
         reason: "The selected local model is not supported by this app version.", action: nil
-      ))))
+      )))
       return
     }
     guard LocalModelsController.hardwareSupported else {
-      apply(.engine(.readiness(epoch: engine.epoch, state: .unavailable(
+      handleEngineEvent(.readiness(epoch: engine.epoch, state: .unavailable(
         reason: "On-device transcription requires Apple Silicon.", action: nil
-      ))))
+      )))
       return
     }
     guard localModels.installedIDs.contains(LocalModelCatalog.primaryID) else {
-      apply(.engine(.readiness(epoch: engine.epoch, state: .unavailable(
+      handleEngineEvent(.readiness(epoch: engine.epoch, state: .unavailable(
         reason: "The local model is not installed.", action: "Download it in Settings > Models."
-      ))))
+      )))
       return
     }
     guard localModels.loadState != .loaded, localModels.loadState != .loading else { return }

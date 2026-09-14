@@ -122,6 +122,15 @@ private actor OpenAITranscriptionState {
     var preview = ""
     var isFinished = false
     var isCancelled = false
+
+    var hasAudio: Bool {
+      chunks.contains { !$0.isEmpty }
+    }
+  }
+
+  private struct BufferedProviderPreview {
+    var text = ""
+    var byteCount = 0
   }
 
   private struct PendingCommit {
@@ -140,6 +149,9 @@ private actor OpenAITranscriptionState {
   private var retiredItemIDs: Set<String> = []
   private var assignedItemIDs: Set<String> = []
   private var awaitingCommits: [PendingCommit] = []
+  private var bufferedProviderPreviews: [String: BufferedProviderPreview] = [:]
+  private var fencedProviderItemIDs: Set<String> = []
+  private var didOverflowBufferedProviderItems = false
   private var activeInputID: TranscriptionInvocationID?
   private var activeAttemptID: String?
   private var attempt = 0
@@ -149,6 +161,9 @@ private actor OpenAITranscriptionState {
   private var eventTask: Task<Void, Never>?
   private var pendingConfigurationAcknowledgements = 0
   private var isShutdown = false
+
+  private static let maximumBufferedProviderItems = 8
+  private static let maximumBufferedPreviewBytesPerItem = 64 * 1_024
 
   init(
     apiKey: String,
@@ -349,6 +364,10 @@ private actor OpenAITranscriptionState {
     guard var invocation = invocations[id], !invocation.isCancelled, !invocation.isFinished else { return }
     invocation.isFinished = true
     invocations[id] = invocation
+    guard invocation.hasAudio else {
+      completeEmptyInvocation(id)
+      return
+    }
     if isReady {
       await commit(id)
     }
@@ -358,6 +377,10 @@ private actor OpenAITranscriptionState {
     guard var invocation = invocations[id], !invocation.isCancelled else { return }
     invocation.isCancelled = true
     invocation.chunks.removeAll(keepingCapacity: false)
+    if invocation.itemID == nil {
+      fencedProviderItemIDs.formUnion(bufferedProviderPreviews.keys)
+      bufferedProviderPreviews.removeAll()
+    }
     if let itemID = invocation.itemID {
       retiredItemIDs.insert(itemID)
     }
@@ -487,6 +510,10 @@ private actor OpenAITranscriptionState {
       .filter { !$0.isCancelled }
       .sorted { $0.value.id.generation < $1.value.id.generation }
     for invocation in live {
+      if invocation.isFinished, !invocation.hasAudio {
+        completeEmptyInvocation(invocation.value.id)
+        continue
+      }
       activeInputID = invocation.value.id
       guard let receipt = client.outbound.replay(
         invocation.chunks,
@@ -543,16 +570,27 @@ private actor OpenAITranscriptionState {
 
   private func acknowledgeCommit(itemID: String) {
     assignedItemIDs.insert(itemID)
+    let bufferedPreview = bufferedProviderPreviews.removeValue(forKey: itemID)
     guard !awaitingCommits.isEmpty else { return }
     let pending = awaitingCommits.removeFirst()
-    guard var invocation = invocations[pending.id] else { return }
+    guard var invocation = invocations[pending.id] else {
+      bindActiveBufferedPreviewIfUnambiguous()
+      return
+    }
     invocation.itemID = itemID
     if invocation.isCancelled {
+      fencedProviderItemIDs.insert(itemID)
       retiredItemIDs.insert(itemID)
       invocations.removeValue(forKey: pending.id)
     } else {
+      fencedProviderItemIDs.remove(itemID)
+      retiredItemIDs.remove(itemID)
       invocations[pending.id] = invocation
+      if let bufferedPreview {
+        appendPreview(id: pending.id, delta: bufferedPreview.text)
+      }
     }
+    bindActiveBufferedPreviewIfUnambiguous()
   }
 
   private func receiveDelta(itemID: String, delta: String) {
@@ -561,13 +599,56 @@ private actor OpenAITranscriptionState {
       return
     }
     guard !retiredItemIDs.contains(itemID), !assignedItemIDs.contains(itemID),
-          awaitingCommits.isEmpty, let id = activeInputID,
-          var invocation = invocations[id], invocation.itemID == nil, !invocation.isCancelled
+          !fencedProviderItemIDs.contains(itemID), !didOverflowBufferedProviderItems
+    else { return }
+    guard awaitingCommits.isEmpty else {
+      bufferProviderPreview(itemID: itemID, delta: delta)
+      return
+    }
+    bindActiveItem(itemID: itemID, delta: delta)
+  }
+
+  private func bufferProviderPreview(itemID: String, delta: String) {
+    guard var preview = bufferedProviderPreviews[itemID] else {
+      guard bufferedProviderPreviews.count < Self.maximumBufferedProviderItems else {
+        didOverflowBufferedProviderItems = true
+        return
+      }
+      let byteCount = delta.utf8.count
+      guard byteCount <= Self.maximumBufferedPreviewBytesPerItem else {
+        didOverflowBufferedProviderItems = true
+        return
+      }
+      bufferedProviderPreviews[itemID] = .init(text: delta, byteCount: byteCount)
+      return
+    }
+    let byteCount = delta.utf8.count
+    guard byteCount <= Self.maximumBufferedPreviewBytesPerItem - preview.byteCount else { return }
+    preview.text += delta
+    preview.byteCount += byteCount
+    bufferedProviderPreviews[itemID] = preview
+  }
+
+  private func bindActiveBufferedPreviewIfUnambiguous() {
+    guard !didOverflowBufferedProviderItems, awaitingCommits.isEmpty,
+          bufferedProviderPreviews.count == 1,
+          let itemID = bufferedProviderPreviews.keys.first
+    else { return }
+    bindActiveItem(itemID: itemID, delta: "")
+  }
+
+  private func bindActiveItem(itemID: String, delta: String) {
+    guard let id = activeInputID, var invocation = invocations[id],
+          invocation.itemID == nil, !invocation.isCancelled
     else { return }
     assignedItemIDs.insert(itemID)
     invocation.itemID = itemID
     invocations[id] = invocation
-    appendPreview(id: id, delta: delta)
+    let bufferedText = bufferedProviderPreviews.removeValue(forKey: itemID)?.text ?? ""
+    let previewDelta = bufferedText + delta
+    if !previewDelta.isEmpty {
+      appendPreview(id: id, delta: previewDelta)
+    }
   }
 
   private func appendPreview(id: TranscriptionInvocationID, delta: String) {
@@ -617,6 +698,9 @@ private actor OpenAITranscriptionState {
 
   private func resetWireCorrelationForReplay() {
     awaitingCommits.removeAll()
+    bufferedProviderPreviews.removeAll()
+    fencedProviderItemIDs.removeAll()
+    didOverflowBufferedProviderItems = false
     assignedItemIDs.removeAll()
     retiredItemIDs.removeAll()
     activeInputID = nil
@@ -644,6 +728,15 @@ private actor OpenAITranscriptionState {
     if activeInputID == id {
       activeInputID = nil
     }
+  }
+
+  private func completeEmptyInvocation(_ id: TranscriptionInvocationID) {
+    guard let invocation = invocations[id], !invocation.isCancelled else { return }
+    retire(id)
+    eventContinuation.yield(.final(
+      id: id,
+      result: .init(text: "", correction: .disabled)
+    ))
   }
 }
 

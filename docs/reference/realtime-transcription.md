@@ -125,3 +125,12 @@ and invocation generation. `DictationSession` handles those common events and
 owns gestures, timeouts, pending work, and insertion decisions for both engines.
 Cloud configuration accepts only `RealtimeSessionConfiguration`; local
 vocabulary and ephemeral context are separate types and persistence keys.
+
+The adapter completes an invocation that retained no audio locally with an empty
+final result instead of sending a commit that the server will reject. While an
+older commit awaits its item ID, the adapter keeps unknown pre-commit deltas in a
+bounded item-ID buffer. An acknowledgement binds and flushes only its exact item;
+if the buffer has not overflowed, the sole remaining item may then bind to the
+active input. Overflow drops live preview text, while the completed transcript
+remains authoritative. Cancellation fences ambiguous item IDs, and reconnect
+clears all attempt-local correlation.

@@ -42,8 +42,9 @@ under a separate key. It seeds from cloud terms once, without reverse migration.
 `LocalInvocationContext` separates permanent and ephemeral entries; the cloud
 configuration type does not accept either. There is no window-text collector.
 
-Correction is opt-in. The strict policy uses similarity 0.80, acoustic rescue
-floors 0.80/0.85, rescue enabled, and no short-term taper. These are matching
+Local dictionary correction defaults to enabled. A saved disabled
+preference is preserved when switching engines. The strict policy uses similarity
+0.80, acoustic rescue floors 0.80/0.85, rescue enabled, and no short-term taper. These are matching
 parameters, not confidence percentages. Generated identifier aliases and explicit
 spoken aliases feed the native rescorer. The pure acceptance guard permits
 canonical term substitutions, rejects isolated insertions/deletions and

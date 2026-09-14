@@ -3,7 +3,7 @@ import HubrisVoiceCore
 import XCTest
 
 final class OpenAITranscriptionBackendTests: XCTestCase {
-  func testBackendDeallocatesWithoutExplicitShutdown() async {
+  func testBackendDeallocatesWithoutExplicitShutdown() {
     var backend: OpenAITranscriptionBackend? = OpenAITranscriptionBackend(
       apiKey: "",
       configuration: .init(languages: [], prompt: "", keywords: [], delay: .low)
@@ -12,11 +12,61 @@ final class OpenAITranscriptionBackendTests: XCTestCase {
     releasedBackend = backend
 
     backend = nil
-    for _ in 0 ..< 20 where releasedBackend != nil {
-      await Task.yield()
-    }
-
     XCTAssertNil(releasedBackend)
+  }
+
+  func testRecorderTimesOutWhenEventDoesNotArrive() async {
+    let recorder = OpenAIEventRecorder(events: AsyncStream { _ in })
+
+    do {
+      _ = try await recorder.next(timeout: .milliseconds(20))
+      XCTFail("Expected the recorder to time out")
+    } catch OpenAIEventRecorderError.timedOut {
+    } catch {
+      XCTFail("Expected a recorder timeout, got \(error)")
+    }
+  }
+
+  func testEmptyLiveInvocationCompletesLocallyWithoutCommit() async throws {
+    let fixture = await Fixture.make()
+    let invocation = fixture.invocation(0)
+    await fixture.backend.testingHandle(.begin(invocation))
+    await fixture.backend.testingHandle(.finish(id: invocation.id))
+
+    let event = try await fixture.next()
+    XCTAssertEqual(
+      event,
+      .final(id: invocation.id, result: .init(text: "", correction: .disabled))
+    )
+    let commitEventID = await fixture.backend.testingCommitEventID(for: invocation.id)
+    let hasInvocation = await fixture.backend.testingHasInvocation(invocation.id)
+    XCTAssertNil(commitEventID)
+    XCTAssertFalse(hasInvocation)
+  }
+
+  func testEmptyOfflineInvocationCompletesLocallyBeforeReconnect() async throws {
+    let fixture = await Fixture.make()
+    await fixture.backend.testingResetForReconnect()
+    let invocation = fixture.invocation(0)
+    await fixture.backend.testingHandle(.begin(invocation))
+    await fixture.backend.testingHandle(.finish(id: invocation.id))
+
+    let event = try await fixture.next()
+    XCTAssertEqual(
+      event,
+      .final(id: invocation.id, result: .init(text: "", correction: .disabled))
+    )
+    let commitEventID = await fixture.backend.testingCommitEventID(for: invocation.id)
+    let hasInvocation = await fixture.backend.testingHasInvocation(invocation.id)
+    XCTAssertNil(commitEventID)
+    XCTAssertFalse(hasInvocation)
+
+    await fixture.backend.testingSetReady(epoch: fixture.epoch)
+    _ = try await fixture.next()
+    do {
+      _ = try await fixture.next(timeout: .milliseconds(30))
+      XCTFail("An empty invocation must not be replayed after local completion")
+    } catch OpenAIEventRecorderError.timedOut {}
   }
 
   func testPrecommitDeltasBecomeWholePreviewSnapshots() async throws {
@@ -35,6 +85,7 @@ final class OpenAITranscriptionBackendTests: XCTestCase {
     let fixture = await Fixture.make()
     let old = fixture.invocation(0)
     await fixture.backend.testingHandle(.begin(old))
+    await fixture.backend.testingHandle(.append(id: old.id, sequence: 0, audio: Data([1])))
     await fixture.backend.testingHandle(.finish(id: old.id))
     await fixture.backend.testingHandle(.cancel(id: old.id))
     await fixture.backend.testingReceive(.inputCommitted(itemID: "old-item"))
@@ -47,10 +98,150 @@ final class OpenAITranscriptionBackendTests: XCTestCase {
     XCTAssertEqual(event, .preview(id: next.id, text: "New"))
   }
 
+  func testPrecommitDeltasRemainSeparatedUntilOlderCommitIsAcknowledged() async throws {
+    let fixture = await Fixture.make()
+    let old = fixture.invocation(0)
+    await fixture.backend.testingHandle(.begin(old))
+    await fixture.backend.testingHandle(.append(id: old.id, sequence: 0, audio: Data([1])))
+    await fixture.backend.testingHandle(.finish(id: old.id))
+
+    let next = fixture.invocation(1)
+    await fixture.backend.testingHandle(.begin(next))
+    await fixture.backend.testingHandle(.append(id: next.id, sequence: 0, audio: Data([2])))
+    await fixture.backend.testingReceive(.transcriptDelta(itemID: "old-item", delta: "Old"))
+    await fixture.backend.testingReceive(.transcriptDelta(itemID: "new-item", delta: "New "))
+    await fixture.backend.testingReceive(.inputCommitted(itemID: "old-item"))
+
+    let oldPreview = try await fixture.next()
+    let nextPreview = try await fixture.next()
+    XCTAssertEqual(oldPreview, .preview(id: old.id, text: "Old"))
+    XCTAssertEqual(nextPreview, .preview(id: next.id, text: "New "))
+
+    await fixture.backend.testingReceive(.transcriptDelta(itemID: "new-item", delta: "words"))
+    let completedPreview = try await fixture.next()
+    XCTAssertEqual(completedPreview, .preview(id: next.id, text: "New words"))
+  }
+
+  func testCancellingUnassignedInputFencesItsBufferedProviderItem() async throws {
+    let fixture = await Fixture.make()
+    let old = fixture.invocation(0)
+    await fixture.backend.testingHandle(.begin(old))
+    await fixture.backend.testingHandle(.append(id: old.id, sequence: 0, audio: Data([1])))
+    await fixture.backend.testingHandle(.finish(id: old.id))
+
+    let cancelled = fixture.invocation(1)
+    await fixture.backend.testingHandle(.begin(cancelled))
+    await fixture.backend.testingHandle(.append(id: cancelled.id, sequence: 0, audio: Data([2])))
+    await fixture.backend.testingReceive(.transcriptDelta(itemID: "old-item", delta: "Old"))
+    await fixture.backend.testingReceive(.transcriptDelta(itemID: "cancelled-item", delta: "Stale"))
+    await fixture.backend.testingHandle(.cancel(id: cancelled.id))
+    await fixture.backend.testingReceive(.inputCommitted(itemID: "old-item"))
+    await fixture.backend.testingReceive(
+      .transcriptCompleted(itemID: "old-item", transcript: "Older final")
+    )
+    let olderFinal = try await fixture.next()
+    XCTAssertEqual(
+      olderFinal,
+      .final(id: old.id, result: .init(text: "Older final", correction: .disabled))
+    )
+
+    let replacement = fixture.invocation(2)
+    await fixture.backend.testingHandle(.begin(replacement))
+    await fixture.backend.testingHandle(.append(id: replacement.id, sequence: 0, audio: Data([3])))
+    await fixture.backend.testingReceive(.transcriptDelta(itemID: "cancelled-item", delta: " stale"))
+    await fixture.backend.testingReceive(.transcriptDelta(itemID: "replacement-item", delta: "Fresh"))
+
+    let preview = try await fixture.next()
+    XCTAssertEqual(preview, .preview(id: replacement.id, text: "Fresh"))
+  }
+
+  func testAmbiguousProviderItemOverflowDropsUnknownPreviewWithoutMisattribution() async throws {
+    let fixture = await Fixture.make()
+    for generation in 0 ..< 7 {
+      let invocation = fixture.invocation(generation)
+      await fixture.backend.testingHandle(.begin(invocation))
+      await fixture.backend.testingHandle(.append(
+        id: invocation.id,
+        sequence: 0,
+        audio: Data([UInt8(generation)])
+      ))
+      await fixture.backend.testingHandle(.finish(id: invocation.id))
+    }
+    let active = fixture.invocation(7)
+    await fixture.backend.testingHandle(.begin(active))
+    await fixture.backend.testingHandle(.append(id: active.id, sequence: 0, audio: Data([2])))
+
+    for index in 0 ... 8 {
+      await fixture.backend.testingReceive(
+        .transcriptDelta(itemID: "ambiguous-\(index)", delta: "\(index)")
+      )
+    }
+    for generation in 0 ..< 7 {
+      await fixture.backend.testingReceive(.inputCommitted(itemID: "ambiguous-\(generation)"))
+      let oldPreview = try await fixture.next()
+      XCTAssertEqual(
+        oldPreview,
+        .preview(id: fixture.id(generation), text: "\(generation)")
+      )
+    }
+    await fixture.backend.testingReceive(.transcriptDelta(itemID: "active", delta: "Wrong"))
+
+    do {
+      _ = try await fixture.next(timeout: .milliseconds(30))
+      XCTFail("Overflowed ambiguous provider items must not be attributed to the active input")
+    } catch OpenAIEventRecorderError.timedOut {}
+  }
+
+  func testReconnectDiscardsBufferedProviderCorrelation() async throws {
+    let fixture = await Fixture.make()
+    let old = fixture.invocation(0)
+    await fixture.backend.testingHandle(.begin(old))
+    await fixture.backend.testingHandle(.append(id: old.id, sequence: 0, audio: Data([1])))
+    await fixture.backend.testingHandle(.finish(id: old.id))
+    let active = fixture.invocation(1)
+    await fixture.backend.testingHandle(.begin(active))
+    await fixture.backend.testingHandle(.append(id: active.id, sequence: 0, audio: Data([2])))
+    await fixture.backend.testingReceive(.transcriptDelta(itemID: "old-attempt-item", delta: "Stale"))
+
+    await fixture.backend.testingResetForReconnect()
+    _ = try await fixture.next()
+    _ = try await fixture.next()
+    await fixture.backend.testingSetReady(epoch: fixture.epoch)
+    _ = try await fixture.next()
+    await fixture.backend.testingReceive(.inputCommitted(itemID: "replayed-old-item"))
+    await fixture.backend.testingReceive(.transcriptDelta(itemID: "new-attempt-item", delta: "Fresh"))
+
+    let preview = try await fixture.next()
+    XCTAssertEqual(preview, .preview(id: active.id, text: "Fresh"))
+  }
+
+  func testOversizedAmbiguousProviderItemDisablesActiveItemInference() async throws {
+    let fixture = await Fixture.make()
+    let old = fixture.invocation(0)
+    await fixture.backend.testingHandle(.begin(old))
+    await fixture.backend.testingHandle(.append(id: old.id, sequence: 0, audio: Data([1])))
+    await fixture.backend.testingHandle(.finish(id: old.id))
+    let active = fixture.invocation(1)
+    await fixture.backend.testingHandle(.begin(active))
+    await fixture.backend.testingHandle(.append(id: active.id, sequence: 0, audio: Data([2])))
+
+    await fixture.backend.testingReceive(
+      .transcriptDelta(itemID: "oversized", delta: String(repeating: "x", count: 65_537))
+    )
+    await fixture.backend.testingReceive(.transcriptDelta(itemID: "candidate", delta: "Wrong"))
+    await fixture.backend.testingReceive(.inputCommitted(itemID: "old-item"))
+
+    do {
+      _ = try await fixture.next(timeout: .milliseconds(30))
+      XCTFail("A hidden oversized item must prevent active input inference")
+    } catch OpenAIEventRecorderError.timedOut {}
+  }
+
   func testRejectedCommitDoesNotConsumeNextAcknowledgement() async throws {
     let fixture = await Fixture.make()
     let rejected = fixture.invocation(0)
     await fixture.backend.testingHandle(.begin(rejected))
+    await fixture.backend.testingHandle(.append(id: rejected.id, sequence: 0, audio: Data([1])))
     await fixture.backend.testingHandle(.finish(id: rejected.id))
     let maybeEventID = await fixture.backend.testingCommitEventID(for: rejected.id)
     let eventID = try XCTUnwrap(maybeEventID)
@@ -64,6 +255,7 @@ final class OpenAITranscriptionBackendTests: XCTestCase {
 
     let next = fixture.invocation(1)
     await fixture.backend.testingHandle(.begin(next))
+    await fixture.backend.testingHandle(.append(id: next.id, sequence: 0, audio: Data([2])))
     await fixture.backend.testingHandle(.finish(id: next.id))
     await fixture.backend.testingReceive(.inputCommitted(itemID: "next-item"))
     await fixture.backend.testingReceive(.transcriptCompleted(itemID: "next-item", transcript: "Recovered"))
@@ -130,8 +322,10 @@ final class OpenAITranscriptionBackendTests: XCTestCase {
     let first = fixture.invocation(0)
     let second = fixture.invocation(1)
     await fixture.backend.testingHandle(.begin(first))
+    await fixture.backend.testingHandle(.append(id: first.id, sequence: 0, audio: Data([1])))
     await fixture.backend.testingHandle(.finish(id: first.id))
     await fixture.backend.testingHandle(.begin(second))
+    await fixture.backend.testingHandle(.append(id: second.id, sequence: 0, audio: Data([2])))
     await fixture.backend.testingHandle(.finish(id: second.id))
     await fixture.backend.testingReceive(.inputCommitted(itemID: "first"))
     await fixture.backend.testingReceive(.inputCommitted(itemID: "second"))
@@ -208,6 +402,7 @@ final class OpenAITranscriptionBackendTests: XCTestCase {
     let fixture = await Fixture.make()
     let invocation = fixture.invocation(0)
     await fixture.backend.testingHandle(.begin(invocation))
+    await fixture.backend.testingHandle(.append(id: invocation.id, sequence: 0, audio: Data([1])))
     await fixture.backend.testingHandle(.finish(id: invocation.id))
     let maybeEventID = await fixture.backend.testingCommitEventID(for: invocation.id)
     let eventID = try XCTUnwrap(maybeEventID)
@@ -249,14 +444,17 @@ private struct Fixture: Sendable {
     .init(id: id(generation), format: .openAI)
   }
 
-  func next() async throws -> TranscriptionEngineEvent {
-    try await recorder.next()
+  func next(timeout: Duration = .seconds(1)) async throws -> TranscriptionEngineEvent {
+    try await recorder.next(timeout: timeout)
   }
+}
+
+private enum OpenAIEventRecorderError: Error {
+  case timedOut
 }
 
 private actor OpenAIEventRecorder {
   private var events: [TranscriptionEngineEvent] = []
-  private var waiters: [CheckedContinuation<TranscriptionEngineEvent, Never>] = []
 
   init(events: AsyncStream<TranscriptionEngineEvent>) {
     Task { [weak self] in
@@ -266,20 +464,19 @@ private actor OpenAIEventRecorder {
     }
   }
 
-  func next() async throws -> TranscriptionEngineEvent {
-    if !events.isEmpty {
-      return events.removeFirst()
+  func next(timeout: Duration = .seconds(1)) async throws -> TranscriptionEngineEvent {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while events.isEmpty, clock.now < deadline {
+      try await Task.sleep(for: .milliseconds(5))
     }
-    return await withCheckedContinuation { continuation in
-      waiters.append(continuation)
+    guard !events.isEmpty else {
+      throw OpenAIEventRecorderError.timedOut
     }
+    return events.removeFirst()
   }
 
   private func record(_ event: TranscriptionEngineEvent) {
-    if !waiters.isEmpty {
-      waiters.removeFirst().resume(returning: event)
-    } else {
-      events.append(event)
-    }
+    events.append(event)
   }
 }

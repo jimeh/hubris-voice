@@ -58,6 +58,14 @@ final class AppModelCoordinationTests: XCTestCase {
     }
   }
 
+  func testLocalConfigurationChecksCancellationAfterSuccessfulUpdate() async {
+    await assertConfigurationUpdateCancellation(updateResult: true)
+  }
+
+  func testLocalConfigurationChecksCancellationAfterFinalBusyUpdate() async {
+    await assertConfigurationUpdateCancellation(updateResult: false)
+  }
+
   func testInsertionAdmissionRejectsEngineChangesAndPendingConfiguration() {
     XCTAssertTrue(AppModelCoordinationPolicy.acceptsNewInsertion(
       changingEngine: false,
@@ -280,10 +288,66 @@ final class AppModelCoordinationTests: XCTestCase {
     XCTAssertEqual(model.overlayModel.message, "Engine closed · Copy it from the menu bar")
   }
 
+  func testTargetedListeningFailureRecordsRejectedRecoveryHistory() throws {
+    var session = DictationSession(readiness: .ready)
+    _ = session.transition(.pressed)
+    let invocationID = try XCTUnwrap(session.listening?.id)
+    _ = session.transition(.engine(.preview(id: invocationID, text: "recover listening failure")))
+    let model = try makeModel(initialSession: session)
+    model.testingHandleEngineEvent(.failure(
+      epoch: invocationID.epoch,
+      id: invocationID,
+      failure: .init(kind: .transport, message: "Transport failed", isRecoverable: true)
+    ))
+    XCTAssertEqual(model.history.latest?.text, "recover listening failure")
+    XCTAssertEqual(model.history.latest?.outcome, .rejected)
+    XCTAssertEqual(model.overlayModel.message, "Transport failed · Copy it from the menu bar")
+  }
+
+  func testTargetedPendingFailureRecordsOnlyExactInvocation() throws {
+    var session = DictationSession(readiness: .ready)
+    let invocationID = try makePending(in: &session)
+    _ = session.transition(.engine(.preview(id: invocationID, text: "recover pending failure")))
+    let model = try makeModel(initialSession: session)
+    let staleID = TranscriptionInvocationID(
+      epoch: .init(invocationID.epoch.rawValue + 1),
+      generation: invocationID.generation
+    )
+    model.testingHandleEngineEvent(.failure(
+      epoch: staleID.epoch,
+      id: staleID,
+      failure: .init(kind: .transport, message: "Stale", isRecoverable: true)
+    ))
+    XCTAssertTrue(model.history.entries.isEmpty)
+    model.testingHandleEngineEvent(.failure(
+      epoch: invocationID.epoch,
+      id: invocationID,
+      failure: .init(kind: .transport, message: "Transport failed", isRecoverable: true)
+    ))
+    XCTAssertEqual(model.history.latest?.text, "recover pending failure")
+    XCTAssertEqual(model.history.latest?.outcome, .rejected)
+  }
+
+  func testUnavailableReadinessRecordsCancelledRecoveryHistory() throws {
+    var session = DictationSession(readiness: .ready)
+    _ = session.transition(.pressed)
+    let invocationID = try XCTUnwrap(session.listening?.id)
+    _ = session.transition(.engine(.preview(id: invocationID, text: "recover unavailable")))
+    let model = try makeModel(initialSession: session)
+    model.testingHandleEngineEvent(.readiness(
+      epoch: invocationID.epoch,
+      state: .unavailable(reason: "Connection unavailable.", action: nil)
+    ))
+    XCTAssertEqual(model.history.latest?.text, "recover unavailable")
+    XCTAssertEqual(model.history.latest?.outcome, .cancelled)
+    XCTAssertEqual(model.overlayModel.message, "Connection unavailable. · Copy it from the menu bar")
+  }
+
   func testRejectedCommandDoesNotRecordStaleOrEmptySnippet() throws {
     var session = DictationSession(readiness: .ready)
     _ = session.transition(.pressed)
     let invocationID = try XCTUnwrap(session.listening?.id)
+    _ = session.transition(.engine(.preview(id: invocationID, text: "keep current")))
     let model = try makeModel(initialSession: session)
     let staleID = TranscriptionInvocationID(
       epoch: .init(invocationID.epoch.rawValue + 1),
@@ -292,11 +356,26 @@ final class AppModelCoordinationTests: XCTestCase {
 
     model.testingRejectEngineCommand(id: staleID, message: "Stale")
     XCTAssertTrue(model.history.entries.isEmpty)
+    XCTAssertEqual(model.overlayModel.transcript, "keep current")
 
-    model.testingRejectEngineCommand(id: invocationID, message: "Engine closed")
-    XCTAssertTrue(model.history.entries.isEmpty)
-    XCTAssertEqual(model.overlayModel.transcript, "")
-    XCTAssertEqual(model.overlayModel.message, "Engine closed")
+    var emptySession = DictationSession(readiness: .ready)
+    _ = emptySession.transition(.pressed)
+    let emptyID = try XCTUnwrap(emptySession.listening?.id)
+    let emptyModel = try makeModel(initialSession: emptySession)
+    emptyModel.testingRejectEngineCommand(id: emptyID, message: "Engine closed")
+    XCTAssertTrue(emptyModel.history.entries.isEmpty)
+    XCTAssertEqual(emptyModel.overlayModel.transcript, "")
+    XCTAssertEqual(emptyModel.overlayModel.message, "Engine closed")
+  }
+
+  func testMissingLocalModelSetsFailedLoadState() throws {
+    let suite = "HubrisVoice.AppModelCoordinationTest.\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set(TranscriptionEngineSelection.fluidAudio.rawValue, forKey: TranscriptionPreferences.Key.engine)
+    let model = AppModel(defaults: defaults)
+    model.localModels.load()
+    XCTAssertEqual(model.localModels.loadState, .failed("The local model is not installed."))
   }
 
   func testAcceptedEngineCommandDoesNotReportRejection() {
@@ -400,6 +479,63 @@ final class AppModelCoordinationTests: XCTestCase {
       UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
     }
     return AppModel(defaults: defaults, initialSession: initialSession)
+  }
+}
+
+private func assertConfigurationUpdateCancellation(
+  updateResult: Bool,
+  file: StaticString = #filePath,
+  line: UInt = #line
+) async {
+  let gate = ConfigurationUpdateGate()
+  let task = Task {
+    try await AppModelCoordinationPolicy.applyLocalConfiguration(maximumAttempts: 1) {
+      await gate.suspend()
+      return updateResult
+    }
+  }
+  guard await gate.waitUntilSuspended() else {
+    task.cancel()
+    await gate.cancelAndResume()
+    XCTFail("Configuration update did not suspend before the deadline", file: file, line: line)
+    return
+  }
+  task.cancel()
+  await gate.cancelAndResume()
+
+  do {
+    _ = try await task.value
+    XCTFail("Cancellation during the update must escape the retry policy", file: file, line: line)
+  } catch is CancellationError {
+  } catch {
+    XCTFail("Unexpected error: \(error)", file: file, line: line)
+  }
+}
+
+private actor ConfigurationUpdateGate {
+  private var continuation: CheckedContinuation<Void, Never>?
+  private var isCancelled = false
+
+  func suspend() async {
+    guard !isCancelled else { return }
+    await withCheckedContinuation { continuation in
+      self.continuation = continuation
+    }
+  }
+
+  func waitUntilSuspended(timeout: Duration = .seconds(1)) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while continuation == nil, clock.now < deadline {
+      await Task.yield()
+    }
+    return continuation != nil
+  }
+
+  func cancelAndResume() {
+    isCancelled = true
+    continuation?.resume()
+    continuation = nil
   }
 }
 

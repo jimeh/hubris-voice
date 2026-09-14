@@ -360,7 +360,8 @@ private extension DictationSession {
     case .readiness(let eventEpoch, let state):
       guard eventEpoch == epoch else { return [] }
       readiness = state
-      return []
+      guard case .unavailable(let reason, let action) = state, listening != nil else { return [] }
+      return localError(message: [reason, action].compactMap(\.self).joined(separator: " "))
     case .preview(let id, let text):
       guard id.epoch == epoch else { return [] }
       if listening?.id == id {

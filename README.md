@@ -128,10 +128,10 @@ in Dictation, then download **Parakeet Unified** in Models. The first model is
 English-only and provides live raw previews with finalized text at release.
 No API key is needed. Selecting local mode never falls back to cloud transcription.
 
-The primary download is about 608 MB. Optional dictionary correction adds about
-103 MB and is off by default. Download its files in Models, then enable
-**Dictionary correction** in Dictation. Local terms have canonical spellings and
-optional spoken aliases. Identifier aliases such as `user underscore ID` for
+The primary download is about 608 MB. Dictionary correction adds about
+103 MB. Download its files in Models. **Local dictionary correction** in Dictation
+defaults to on; a saved off preference is preserved. Local terms have canonical
+spellings and optional spoken aliases. Identifier aliases such as `user underscore ID` for
 `user_id` are generated automatically. Correction only accepts constrained term
 substitutions; it can still make mistakes. If correction fails, usable raw text
 is retained and the Models tab reports degraded correction.

@@ -32,7 +32,7 @@ public struct TranscriptionPreferences: Equatable, Sendable {
   public init(
     engine: TranscriptionEngineSelection = .openAI,
     localModel: String = Self.defaultLocalModel,
-    correctionEnabled: Bool = false
+    correctionEnabled: Bool = true
   ) {
     self.engine = engine
     self.localModel = localModel
@@ -44,7 +44,7 @@ public struct TranscriptionPreferences: Equatable, Sendable {
       engine: store.string(Key.engine).flatMap(TranscriptionEngineSelection.init(rawValue:))
         ?? (store.contains(Key.engine) ? .fluidAudio : .openAI),
       localModel: store.string(Key.localModel) ?? defaultLocalModel,
-      correctionEnabled: store.bool(Key.correctionEnabled) ?? false
+      correctionEnabled: store.bool(Key.correctionEnabled) ?? true
     )
   }
 
