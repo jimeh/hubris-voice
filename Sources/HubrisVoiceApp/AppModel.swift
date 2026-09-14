@@ -905,7 +905,10 @@ final class AppModel: ObservableObject {
       submitEngineCommand(.begin(invocation))
     case .finishTranscription(let invocationID):
       captureFinalizer.commitAfterStop(generation: invocationID.generation) { [weak self] in
-        self?.submitEngineCommand(.finish(id: invocationID))
+        guard let self,
+              session.pending.contains(where: { $0.id == invocationID })
+        else { return }
+        submitEngineCommand(.finish(id: invocationID))
       }
     case .cancelTranscription(let invocationID): submitEngineCommand(.cancel(id: invocationID))
     case .scheduleFinalizingTimeout(let generation, let delay):
@@ -1233,7 +1236,12 @@ final class AppModel: ObservableObject {
 
   private func submitEngineCommand(_ command: TranscriptionEngineCommand) {
     guard engine.submit(command) else {
-      apply(.localError(message: "The transcription engine is not accepting audio."))
+      let message = "The transcription engine is not accepting audio."
+      if case .append(let invocationID, _, _) = command {
+        apply(.commandRejected(id: invocationID, message: message))
+      } else {
+        apply(.localError(message: message))
+      }
       return
     }
   }

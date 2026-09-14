@@ -112,6 +112,24 @@ final class TranscriptionEngineRuntimeTests: XCTestCase {
     }
     XCTAssertTrue(runtime.eventStreamTerminated)
   }
+
+  func testReleasedCoordinatorFinishesHeldOutputStream() async throws {
+    let runtime = StubTranscriptionEngineRuntime(acceptsCommands: true)
+    var coordinator: TranscriptionEngineCoordinator? = TranscriptionEngineCoordinator(
+      runtime: runtime,
+      epoch: .init(1)
+    )
+    let outputEnded = expectation(description: "coordinator output ended")
+    let output = try XCTUnwrap(coordinator?.events)
+    Task {
+      for await _ in output {}
+      outputEnded.fulfill()
+    }
+
+    coordinator = nil
+
+    await fulfillment(of: [outputEnded], timeout: 1)
+  }
 }
 
 private final class StubTranscriptionEngineRuntime: TranscriptionEngineRuntime, @unchecked Sendable {

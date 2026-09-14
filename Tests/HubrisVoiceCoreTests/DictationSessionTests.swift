@@ -174,6 +174,49 @@ final class DictationSessionTests: XCTestCase {
     XCTAssertEqual(session.presented, .error(message: "Rejected", text: "recover me"))
   }
 
+  func testRejectedPendingAppendCancelsOnlyItsGenerationAndIgnoresLateFinal() throws {
+    var session = readySession()
+    let rejectedID = try makePending(in: &session)
+    _ = session.transition(.engine(.preview(id: rejectedID, text: "recover pending")))
+    let preservedPendingID = try makePending(in: &session)
+    _ = session.transition(.pressed)
+    let listeningID = try XCTUnwrap(session.listening?.id)
+
+    XCTAssertEqual(
+      session.transition(.commandRejected(id: rejectedID, message: "Mailbox full")),
+      [
+        .cancelFinalizingTimeout(generation: rejectedID.generation),
+        .cancelTranscription(id: rejectedID),
+        .discardSnippet(generation: rejectedID.generation),
+        .scheduleDismiss(after: .seconds(4)),
+      ]
+    )
+    XCTAssertEqual(session.listening?.id, listeningID)
+    XCTAssertEqual(session.pending.map(\.id), [preservedPendingID])
+    XCTAssertEqual(session.presented, .error(message: "Mailbox full", text: "recover pending"))
+    XCTAssertEqual(final(&session, id: rejectedID, text: "late final"), [])
+  }
+
+  func testRejectedListeningAppendStopsAndRetiresItsGeneration() throws {
+    var session = readySession()
+    _ = session.transition(.pressed)
+    let rejectedID = try XCTUnwrap(session.listening?.id)
+    _ = session.transition(.engine(.preview(id: rejectedID, text: "recover listening")))
+
+    XCTAssertEqual(
+      session.transition(.commandRejected(id: rejectedID, message: "Mailbox full")),
+      [
+        .stopCapture(generation: rejectedID.generation),
+        .cancelTranscription(id: rejectedID),
+        .discardSnippet(generation: rejectedID.generation),
+        .scheduleDismiss(after: .seconds(4)),
+      ]
+    )
+    XCTAssertNil(session.listening)
+    XCTAssertEqual(session.presented, .error(message: "Mailbox full", text: "recover listening"))
+    XCTAssertEqual(session.transition(.released(heldDuration: 1)), [])
+  }
+
   func testEngineReplacementRequiresQuiescenceAndNewerEpoch() {
     var session = readySession(epoch: .init(3))
     _ = session.transition(.pressed)

@@ -4,6 +4,22 @@ import Foundation
 import XCTest
 
 final class LocalModelStoreTests: XCTestCase {
+  func testDownloaderRejectsATruncatedResponseAndRemovesThePartialFile() async throws {
+    let fixture = try DownloaderFixture(chunks: [Data("short".utf8)])
+    defer { fixture.clean() }
+
+    do {
+      try await fixture.downloader.download(
+        from: fixture.source,
+        to: fixture.destination,
+        expectedByteCount: 6
+      ) { _ in }
+      XCTFail("A truncated response must fail in the downloader")
+    } catch LocalModelStore.StoreError.downloadFailed {}
+
+    XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.destination.path))
+  }
+
   func testDownloaderAcceptsAnExactSizeResponse() async throws {
     let fixture = try DownloaderFixture(chunks: [Data("exact".utf8)])
     defer { fixture.clean() }

@@ -72,6 +72,9 @@ struct URLSessionModelDownloader: LocalModelDownloading {
       }
     }
     try Task.checkCancellation()
+    guard receivedBytes == expectedByteCount else {
+      throw LocalModelStore.StoreError.downloadFailed
+    }
     if !buffer.isEmpty {
       try handle.write(contentsOf: buffer)
       progress(receivedBytes)

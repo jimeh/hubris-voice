@@ -63,6 +63,7 @@ public struct DictationSession: Equatable, Sendable {
     case dismissRequested
     case pasteLastRequested(text: String)
     case localError(message: String)
+    case commandRejected(id: TranscriptionInvocationID, message: String)
     case bufferFull(generation: Int)
     case engine(TranscriptionEngineEvent)
     case engineReplaced(epoch: TranscriptionBackendEpoch, readiness: TranscriptionEngineReadiness)
@@ -156,6 +157,7 @@ public struct DictationSession: Equatable, Sendable {
     case .dismissRequested: dismissRequested()
     case .pasteLastRequested(let text): pasteLastRequested(text: text)
     case .localError(let message): localError(message: message)
+    case .commandRejected(let id, let message): commandRejected(id: id, message: message)
     case .engine(let event): handle(event)
     case .engineReplaced(let epoch, let readiness):
       replaceEngine(epoch: epoch, readiness: readiness)
@@ -326,6 +328,22 @@ private extension DictationSession {
       .discardSnippet(generation: listening.generation),
       .scheduleDismiss(after: configuration.attentionLinger),
     ]
+  }
+
+  mutating func commandRejected(id: TranscriptionInvocationID, message: String) -> [Effect] {
+    guard id.epoch == epoch else { return [] }
+    if let index = pending.firstIndex(where: { $0.id == id }) {
+      let snippet = pending.remove(at: index)
+      setPresented(.error(message: message, text: snippet.transcript))
+      return [
+        .cancelFinalizingTimeout(generation: snippet.generation),
+        .cancelTranscription(id: snippet.id),
+        .discardSnippet(generation: snippet.generation),
+        .scheduleDismiss(after: configuration.attentionLinger),
+      ]
+    }
+    guard listening?.id == id else { return [] }
+    return localError(message: message)
   }
 
   mutating func replaceEngine(

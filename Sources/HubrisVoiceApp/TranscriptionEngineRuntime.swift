@@ -93,6 +93,7 @@ final class TranscriptionEngineCoordinator {
 
   deinit {
     eventTask?.cancel()
+    eventContinuation.finish()
   }
 
   @discardableResult
