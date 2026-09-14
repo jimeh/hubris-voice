@@ -9,6 +9,10 @@ final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable {
     self.defaults = defaults
   }
 
+  func contains(_ key: String) -> Bool {
+    defaults.object(forKey: key) != nil
+  }
+
   func string(_ key: String) -> String? {
     defaults.string(forKey: key)
   }

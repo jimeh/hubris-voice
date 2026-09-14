@@ -37,6 +37,11 @@ final class TranscriptionPreferencesTests: XCTestCase {
 
 private final class PreferenceStore: SettingsStore, @unchecked Sendable {
   private var values: [String: Any] = [:]
+
+  func contains(_ key: String) -> Bool {
+    values.keys.contains(key)
+  }
+
   func string(_ key: String) -> String? {
     values[key] as? String
   }

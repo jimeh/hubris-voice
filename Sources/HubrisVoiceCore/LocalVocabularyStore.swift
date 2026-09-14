@@ -18,7 +18,10 @@ public enum LocalVocabularyStore {
   }
 
   public static func load(from store: SettingsStore) throws -> [LocalVocabularyEntry] {
-    guard let encoded = store.string(Key.vocabulary) else { return [] }
+    guard store.contains(Key.vocabulary) else { return [] }
+    guard let encoded = store.string(Key.vocabulary) else {
+      throw StoreError.invalidPayload
+    }
     guard let data = encoded.data(using: .utf8) else {
       throw StoreError.invalidPayload
     }
@@ -53,7 +56,7 @@ public enum LocalVocabularyStore {
       return try load(from: store)
     }
 
-    if store.string(Key.vocabulary) == nil {
+    if !store.contains(Key.vocabulary) {
       let entries = cloudCanonicalTexts.map {
         LocalVocabularyEntry(canonicalText: $0)
       }

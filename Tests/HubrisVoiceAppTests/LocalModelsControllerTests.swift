@@ -5,6 +5,44 @@ import XCTest
 
 @MainActor
 final class LocalModelsControllerTests: XCTestCase {
+  func testSeededNonStringVocabularyDisablesEditingAndPreservesData() throws {
+    let fixture = try makeFixture()
+    defer { fixture.clean() }
+    let persisted = Data([0x00, 0x01, 0x02, 0xff])
+    fixture.defaults.set(persisted, forKey: LocalVocabularyStore.Key.vocabulary)
+
+    let controller = LocalModelsController(
+      settings: UserDefaultsSettingsStore(fixture.defaults),
+      store: controllerStore(in: fixture.root)
+    )
+
+    XCTAssertFalse(controller.isDictionaryAvailable)
+    XCTAssertNotNil(controller.dictionaryError)
+    controller.entries.append(LocalVocabularyEntry(canonicalText: "MustNotPersist"))
+    XCTAssertTrue(controller.entries.isEmpty)
+    XCTAssertEqual(fixture.defaults.data(forKey: LocalVocabularyStore.Key.vocabulary), persisted)
+  }
+
+  func testUnseededNonStringVocabularyDisablesEditingAndPreservesArray() throws {
+    let fixture = try makeFixture()
+    defer { fixture.clean() }
+    let persisted = ["unexpected", "array"]
+    fixture.defaults.set(persisted, forKey: LocalVocabularyStore.Key.vocabulary)
+    fixture.defaults.removeObject(forKey: LocalVocabularyStore.Key.cloudSeedCompleted)
+
+    let controller = LocalModelsController(
+      settings: UserDefaultsSettingsStore(fixture.defaults),
+      store: controllerStore(in: fixture.root)
+    )
+
+    XCTAssertFalse(controller.isDictionaryAvailable)
+    XCTAssertNotNil(controller.dictionaryError)
+    controller.entries = [LocalVocabularyEntry(canonicalText: "MustNotPersist")]
+    XCTAssertTrue(controller.entries.isEmpty)
+    XCTAssertEqual(fixture.defaults.stringArray(forKey: LocalVocabularyStore.Key.vocabulary), persisted)
+    XCTAssertFalse(fixture.defaults.bool(forKey: LocalVocabularyStore.Key.cloudSeedCompleted))
+  }
+
   func testInvalidVocabularyDisablesEditingAndPreservesPersistedData() throws {
     let fixture = try makeFixture()
     defer { fixture.clean() }
