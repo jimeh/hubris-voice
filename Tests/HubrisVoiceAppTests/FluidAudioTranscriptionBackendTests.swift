@@ -155,7 +155,7 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
     try await processor.waitForFinish()
 
     let unloadTask = Task { await backend.unload() }
-    try await Task.sleep(for: .milliseconds(20))
+    try await processor.waitForFinishCancellation()
     let releasesWhileInFlight = await releases.count()
     XCTAssertEqual(releasesWhileInFlight, 0)
 
@@ -1184,8 +1184,12 @@ private actor FakeFluidAudioProcessor: FluidAudioProcessing {
   func finish() async throws -> FluidAudioProcessResult {
     finishStarted = true
     if shouldBlockFinish, ignoreFinishCancellation {
-      try await withCheckedThrowingContinuation { continuation in
-        finishContinuation = continuation
+      try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { continuation in
+          finishContinuation = continuation
+        }
+      } onCancel: {
+        Task { await self.recordFinishCancellation() }
       }
     }
     do {
@@ -1260,6 +1264,10 @@ private actor FakeFluidAudioProcessor: FluidAudioProcessing {
       try await Task.sleep(for: .milliseconds(5))
     }
     guard finishCancelled else { throw TestWaitError.timedOut }
+  }
+
+  private func recordFinishCancellation() {
+    finishCancelled = true
   }
 
   func resetCount() -> Int {

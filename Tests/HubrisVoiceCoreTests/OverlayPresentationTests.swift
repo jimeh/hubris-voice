@@ -43,50 +43,121 @@ final class OverlayPresentationTests: XCTestCase {
   }
 
   func testDelayedActionRunsAfterDelay() async {
-    let scheduler = await DelayedActionScheduler()
+    let sleeper = ControlledSleeper()
+    let scheduler = await DelayedActionScheduler {
+      try await sleeper.sleep(for: $0)
+    }
     let probe = CompletionProbe()
 
     await scheduler.schedule(after: .milliseconds(10)) {
       probe.markCompleted()
     }
 
+    let didStartSleeping = await sleeper.waitUntilStarted(count: 1)
+    XCTAssertTrue(didStartSleeping)
+    let requestedDurations = await sleeper.requestedDurations
+    XCTAssertEqual(requestedDurations, [.milliseconds(10)])
     let didCompleteImmediately = await probe.isCompleted
     XCTAssertFalse(didCompleteImmediately)
+    await sleeper.advanceAll()
     let didComplete = await waitUntilCompleted(probe)
     XCTAssertTrue(didComplete)
   }
 
   func testDelayedActionCanBeCancelled() async {
-    let scheduler = await DelayedActionScheduler()
+    let sleeper = ControlledSleeper()
+    let scheduler = await DelayedActionScheduler {
+      try await sleeper.sleep(for: $0)
+    }
     let probe = CompletionProbe()
+    let barrier = CompletionProbe()
 
     await scheduler.schedule(after: .milliseconds(10)) {
       probe.markCompleted()
     }
+    let didStartSleeping = await sleeper.waitUntilStarted(count: 1)
+    XCTAssertTrue(didStartSleeping)
     await scheduler.cancel()
+    await scheduler.schedule(after: .milliseconds(10)) {
+      barrier.markCompleted()
+    }
+    let didStartBarrier = await sleeper.waitUntilStarted(count: 2)
+    XCTAssertTrue(didStartBarrier)
+    let requestedDurations = await sleeper.requestedDurations
+    XCTAssertEqual(requestedDurations, [.milliseconds(10), .milliseconds(10)])
 
-    try? await Task.sleep(for: .milliseconds(100))
-    let didComplete = await probe.isCompleted
-    XCTAssertFalse(didComplete)
+    await sleeper.advanceAll()
+    let didCompleteBarrier = await waitUntilCompleted(barrier)
+    XCTAssertTrue(didCompleteBarrier)
+    let didCompleteCancelledAction = await probe.isCompleted
+    XCTAssertFalse(didCompleteCancelledAction)
   }
 
   func testSchedulingAgainReplacesPendingAction() async {
-    let scheduler = await DelayedActionScheduler()
+    let sleeper = ControlledSleeper()
+    let scheduler = await DelayedActionScheduler {
+      try await sleeper.sleep(for: $0)
+    }
     let firstProbe = CompletionProbe()
     let replacementProbe = CompletionProbe()
 
     await scheduler.schedule(after: .milliseconds(40)) {
       firstProbe.markCompleted()
     }
+    let didStartFirstSleep = await sleeper.waitUntilStarted(count: 1)
+    XCTAssertTrue(didStartFirstSleep)
     await scheduler.schedule(after: .milliseconds(10)) {
       replacementProbe.markCompleted()
     }
+    let didStartReplacementSleep = await sleeper.waitUntilStarted(count: 2)
+    XCTAssertTrue(didStartReplacementSleep)
+    let requestedDurations = await sleeper.requestedDurations
+    XCTAssertEqual(requestedDurations, [.milliseconds(40), .milliseconds(10)])
 
+    await sleeper.advanceAll()
     let replacementDidComplete = await waitUntilCompleted(replacementProbe)
-    try? await Task.sleep(for: .milliseconds(80))
     let firstDidComplete = await firstProbe.isCompleted
     XCTAssertFalse(firstDidComplete)
     XCTAssertTrue(replacementDidComplete)
+  }
+}
+
+private actor ControlledSleeper {
+  private var nextID = 0
+  private(set) var requestedDurations: [Duration] = []
+  private var continuations: [Int: CheckedContinuation<Void, any Error>] = [:]
+
+  func sleep(for duration: Duration) async throws {
+    let sleepID = nextID
+    nextID += 1
+    requestedDurations.append(duration)
+    try await withTaskCancellationHandler {
+      try Task.checkCancellation()
+      try await withCheckedThrowingContinuation { continuation in
+        continuations[sleepID] = continuation
+      }
+    } onCancel: {
+      Task { await self.cancel(sleepID: sleepID) }
+    }
+  }
+
+  func waitUntilStarted(count: Int, timeout: Duration = .seconds(1)) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while requestedDurations.count < count, clock.now < deadline {
+      await Task.yield()
+    }
+    return requestedDurations.count >= count
+  }
+
+  func advanceAll() {
+    let pending = continuations.values
+    continuations.removeAll()
+    pending.forEach { $0.resume() }
+  }
+
+  private func cancel(sleepID: Int) {
+    continuations.removeValue(forKey: sleepID)?.resume(throwing: CancellationError())
   }
 }
 

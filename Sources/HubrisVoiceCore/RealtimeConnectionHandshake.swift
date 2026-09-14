@@ -40,6 +40,10 @@ public actor RealtimeConnectionHandshake {
 
   public init() {}
 
+  var isWaitingForOpen: Bool {
+    waiter != nil
+  }
+
   public func waitForOpen(timeout: Duration) async throws {
     switch state {
     case .open:
