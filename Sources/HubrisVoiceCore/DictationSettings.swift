@@ -1,6 +1,7 @@
 import Foundation
 
 public protocol SettingsStore: AnyObject, Sendable {
+  func contains(_ key: String) -> Bool
   func string(_ key: String) -> String?
   func stringArray(_ key: String) -> [String]?
   func bool(_ key: String) -> Bool?

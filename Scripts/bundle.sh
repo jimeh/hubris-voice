@@ -50,6 +50,10 @@ mkdir -p "${stage_app}/Contents/MacOS"
 mkdir -p "${stage_app}/Contents/Resources"
 cp "${bin_path}/HubrisVoice" "${stage_app}/Contents/MacOS/HubrisVoice"
 cp "${repo_dir}/Support/Info.plist" "${stage_app}/Contents/Info.plist"
+for resource_bundle in "${bin_path}"/*.bundle(N/); do
+  ditto "${resource_bundle}" \
+    "${stage_app}/Contents/Resources/${resource_bundle:t}"
+done
 
 plutil -lint "${stage_app}/Contents/Info.plist"
 if [[ "${signing_mode}" == "development" ]]; then

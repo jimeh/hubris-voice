@@ -1,0 +1,239 @@
+diff --git a/Sources/FastClusterWrapper/FastClusterWrapper.cpp b/Sources/FastClusterWrapper/FastClusterWrapper.cpp
+index 5a8b8e5..23beff7 100644
+--- a/Sources/FastClusterWrapper/FastClusterWrapper.cpp
++++ b/Sources/FastClusterWrapper/FastClusterWrapper.cpp
+@@ -10,17 +10,8 @@
+ #define fc_isnan(X) ((X) != (X))
+ #endif
+ 
+-#if defined(__clang__)
+-#pragma clang diagnostic push
+-#pragma clang diagnostic ignored "-Wpragma-messages"
+-#endif
+-
+ #include "fastcluster_internal.hpp"
+ 
+-#if defined(__clang__)
+-#pragma clang diagnostic pop
+-#endif
+-
+ namespace {
+ 
+ struct CentroidDissimilarity {
+diff --git a/Sources/FastClusterWrapper/fastcluster_internal.hpp b/Sources/FastClusterWrapper/fastcluster_internal.hpp
+index ce890ec..007b51c 100644
+--- a/Sources/FastClusterWrapper/fastcluster_internal.hpp
++++ b/Sources/FastClusterWrapper/fastcluster_internal.hpp
+@@ -47,10 +47,7 @@
+ #ifdef __SOFTFP__
+ #define NO_INCLUDE_FENV
+ #endif
+-#ifdef NO_INCLUDE_FENV
+-#pragma message("Do not use fenv header.")
+-#else
+-#pragma message("Use fenv header.")
++#ifndef NO_INCLUDE_FENV
+ /* The following #pragma is necessary even if it generates a warning in many
+    compilers. Quoting https://en.cppreference.com/w/cpp/numeric/fenv:
+    "The floating-point environment access and modification is only meaningful
+diff --git a/Sources/FluidAudio/ASR/Cohere/CoherePipeline.swift b/Sources/FluidAudio/ASR/Cohere/CoherePipeline.swift
+index d8c9346..50a5475 100644
+--- a/Sources/FluidAudio/ASR/Cohere/CoherePipeline.swift
++++ b/Sources/FluidAudio/ASR/Cohere/CoherePipeline.swift
+@@ -155,11 +155,13 @@ public final class CohereMelSpectrogram {
+ 
+         for frame in 0..<nFrames {
+             let start = frame * config.hopLength
+-            vDSP_vmul(
+-                UnsafePointer(padded).advanced(by: start), 1,
+-                paddedWindow, 1,
+-                &windowed, 1,
+-                vDSP_Length(nFFT))
++            padded.withUnsafeBufferPointer { paddedBuffer in
++                vDSP_vmul(
++                    paddedBuffer.baseAddress!.advanced(by: start), 1,
++                    paddedWindow, 1,
++                    &windowed, 1,
++                    vDSP_Length(nFFT))
++            }
+ 
+             // Pack to split-complex.
+             windowed.withUnsafeBufferPointer { buf in
+diff --git a/Sources/FluidAudio/ASR/Parakeet/SlidingWindow/SlidingWindowAsrManager.swift b/Sources/FluidAudio/ASR/Parakeet/SlidingWindow/SlidingWindowAsrManager.swift
+index 32d6daa..4471105 100644
+--- a/Sources/FluidAudio/ASR/Parakeet/SlidingWindow/SlidingWindowAsrManager.swift
++++ b/Sources/FluidAudio/ASR/Parakeet/SlidingWindow/SlidingWindowAsrManager.swift
+@@ -218,7 +218,7 @@ public actor SlidingWindowAsrManager {
+         AsyncStream { continuation in
+             self.updateContinuation = continuation
+ 
+-            continuation.onTermination = { @Sendable _ in
++            continuation.onTermination = { @Sendable [weak self] _ in
+                 Task { [weak self] in
+                     await self?.clearUpdateContinuation()
+                 }
+@@ -342,7 +342,6 @@ public actor SlidingWindowAsrManager {
+         let chunk = config.chunkSamples
+         let right = config.rightContextSamples
+         let left = config.leftContextSamples
+-        let sampleRate = config.asrConfig.sampleRate
+ 
+         var currentAbsEnd = bufferStartIndex + sampleBuffer.count
+         while currentAbsEnd >= (nextWindowCenterStart + chunk + right) {
+@@ -376,7 +375,6 @@ public actor SlidingWindowAsrManager {
+     private func flushRemaining() async {
+         let chunk = config.chunkSamples
+         let left = config.leftContextSamples
+-        let sampleRate = config.asrConfig.sampleRate
+ 
+         var currentAbsEnd = bufferStartIndex + sampleBuffer.count
+         while currentAbsEnd > nextWindowCenterStart {  // process until we exhaust
+diff --git a/Sources/FluidAudio/ASR/Parakeet/Streaming/Nemotron/StreamingNemotronMultilingualAsrManager+Pipeline.swift b/Sources/FluidAudio/ASR/Parakeet/Streaming/Nemotron/StreamingNemotronMultilingualAsrManager+Pipeline.swift
+index 0c48e4e..0a15a95 100644
+--- a/Sources/FluidAudio/ASR/Parakeet/Streaming/Nemotron/StreamingNemotronMultilingualAsrManager+Pipeline.swift
++++ b/Sources/FluidAudio/ASR/Parakeet/Streaming/Nemotron/StreamingNemotronMultilingualAsrManager+Pipeline.swift
+@@ -308,7 +308,7 @@ extension StreamingNemotronMultilingualAsrManager {
+         if smartSpecEnabled,
+             let jointBatched = self.jointNoEncProjBatched,
+             let decoder = self.decoder,
+-            let encProjResolved: MLMultiArray = try await {
++            let encProjResolved: MLMultiArray = {
+                 if let direct = encoderProj { return direct }
+                 return nil
+             }()
+diff --git a/Sources/FluidAudio/ASR/Parakeet/Streaming/RnntDecoder.swift b/Sources/FluidAudio/ASR/Parakeet/Streaming/RnntDecoder.swift
+index e2e4f36..b43f2d3 100644
+--- a/Sources/FluidAudio/ASR/Parakeet/Streaming/RnntDecoder.swift
++++ b/Sources/FluidAudio/ASR/Parakeet/Streaming/RnntDecoder.swift
+@@ -88,8 +88,6 @@ public final class RnntDecoder {
+         let startT = min(skipFrames, maxT)
+ 
+         outerLoop: for t in startT..<maxT {
+-            let globalT = timeOffset + t
+-
+             // Extract encoder step
+             let encoderStep = try extractEncoderStep(from: encoderOutput, timeIndex: t, hiddenDim: hiddenDim)
+ 
+diff --git a/Sources/FluidAudio/Diarizer/Offline/Extraction/OfflineEmbeddingExtractor.swift b/Sources/FluidAudio/Diarizer/Offline/Extraction/OfflineEmbeddingExtractor.swift
+index 39a9c03..9b203d1 100644
+--- a/Sources/FluidAudio/Diarizer/Offline/Extraction/OfflineEmbeddingExtractor.swift
++++ b/Sources/FluidAudio/Diarizer/Offline/Extraction/OfflineEmbeddingExtractor.swift
+@@ -773,10 +773,8 @@ struct OfflineEmbeddingExtractor {
+         }
+ 
+         let options = MLPredictionOptions()
+-        if #available(macOS 14.0, iOS 17.0, *) {
+-            for array in audioArrays {
+-                array.prefetchToNeuralEngine()
+-            }
++        for array in audioArrays {
++            array.prefetchToNeuralEngine()
+         }
+ 
+         let batchProvider = MLArrayBatchProvider(array: providers)
+@@ -880,10 +878,8 @@ struct OfflineEmbeddingExtractor {
+             ]
+         )
+         let options = MLPredictionOptions()
+-        if #available(macOS 14.0, iOS 17.0, *) {
+-            fbankFeatures.prefetchToNeuralEngine()
+-            weightsArray.prefetchToNeuralEngine()
+-        }
++        fbankFeatures.prefetchToNeuralEngine()
++        weightsArray.prefetchToNeuralEngine()
+ 
+         let output = try embeddingModel.prediction(from: provider, options: options)
+         guard let embeddingArray = output.featureValue(for: embeddingOutputName)?.multiArrayValue else {
+diff --git a/Sources/FluidAudio/Shared/ANEMemoryUtils.swift b/Sources/FluidAudio/Shared/ANEMemoryUtils.swift
+index 6e6ff8a..0c961e3 100644
+--- a/Sources/FluidAudio/Shared/ANEMemoryUtils.swift
++++ b/Sources/FluidAudio/Shared/ANEMemoryUtils.swift
+@@ -107,6 +107,10 @@ public enum ANEMemoryUtils {
+             return 8
+         case .int32:
+             return MemoryLayout<Int32>.stride
++        #if compiler(>=6.2)
++        case .int8:
++            return MemoryLayout<Int8>.stride
++        #endif
+         @unknown default:
+             return MemoryLayout<Float>.stride
+         }
+diff --git a/Sources/FluidAudio/Shared/AudioConverter.swift b/Sources/FluidAudio/Shared/AudioConverter.swift
+index db9c0be..d75103d 100644
+--- a/Sources/FluidAudio/Shared/AudioConverter.swift
++++ b/Sources/FluidAudio/Shared/AudioConverter.swift
+@@ -163,7 +163,7 @@ final public class AudioConverter: Sendable {
+ 
+         // Copy samples into buffer
+         if let channelData = inputBuffer.floatChannelData {
+-            samples.withUnsafeBufferPointer { src in
++            _ = samples.withUnsafeBufferPointer { src in
+                 memcpy(channelData[0], src.baseAddress!, samples.count * MemoryLayout<Float>.stride)
+             }
+         }
+diff --git a/Sources/FluidAudio/Shared/SystemInfo.swift b/Sources/FluidAudio/Shared/SystemInfo.swift
+index c3677b5..1f6ec3f 100644
+--- a/Sources/FluidAudio/Shared/SystemInfo.swift
++++ b/Sources/FluidAudio/Shared/SystemInfo.swift
+@@ -141,7 +141,8 @@ public enum SystemInfo {
+             sysctlbyname(key, ptr.baseAddress, &size, nil, 0)
+         }
+         guard result == 0 else { return nil }
+-        return String(cString: buffer)
++        let end = buffer.firstIndex(of: 0) ?? buffer.endIndex
++        return String(decoding: buffer[..<end].map(UInt8.init(bitPattern:)), as: UTF8.self)
+         #else
+         return nil
+         #endif
+diff --git a/Sources/FluidAudio/TTS/KokoroAne/G2P/Mandarin/MandarinNumberNormalizer.swift b/Sources/FluidAudio/TTS/KokoroAne/G2P/Mandarin/MandarinNumberNormalizer.swift
+index 28a9114..f78ba27 100644
+--- a/Sources/FluidAudio/TTS/KokoroAne/G2P/Mandarin/MandarinNumberNormalizer.swift
++++ b/Sources/FluidAudio/TTS/KokoroAne/G2P/Mandarin/MandarinNumberNormalizer.swift
+@@ -91,10 +91,6 @@ public enum MandarinNumberNormalizer {
+             result += "千"
+         }
+         if h > 0 {
+-            if pendingZero {
+-                result += "零"
+-                pendingZero = false
+-            }
+             result.append(digits[h])
+             result += "百"
+         } else if q > 0 && (t > 0 || u > 0) {
+diff --git a/Sources/FluidAudio/TTS/StyleTTS2/Pipeline/Synthesize/StyleTTS2MultiArray.swift b/Sources/FluidAudio/TTS/StyleTTS2/Pipeline/Synthesize/StyleTTS2MultiArray.swift
+index f1f818f..2aeec8b 100644
+--- a/Sources/FluidAudio/TTS/StyleTTS2/Pipeline/Synthesize/StyleTTS2MultiArray.swift
++++ b/Sources/FluidAudio/TTS/StyleTTS2/Pipeline/Synthesize/StyleTTS2MultiArray.swift
+@@ -70,6 +70,13 @@ public enum StyleTTS2MultiArray {
+             for i in 0..<n {
+                 out[i] = Float(src[i])
+             }
++        #if compiler(>=6.2)
++        case .int8:
++            let src = arr.dataPointer.bindMemory(to: Int8.self, capacity: n)
++            for i in 0..<n {
++                out[i] = Float(src[i])
++            }
++        #endif
+         @unknown default:
+             for i in 0..<n {
+                 out[i] = arr[i].floatValue
+diff --git a/Sources/FluidAudio/TTS/Supertonic3/Pipeline/Synthesize/Supertonic3MultiArray.swift b/Sources/FluidAudio/TTS/Supertonic3/Pipeline/Synthesize/Supertonic3MultiArray.swift
+index e37f52f..86f3286 100644
+--- a/Sources/FluidAudio/TTS/Supertonic3/Pipeline/Synthesize/Supertonic3MultiArray.swift
++++ b/Sources/FluidAudio/TTS/Supertonic3/Pipeline/Synthesize/Supertonic3MultiArray.swift
+@@ -73,6 +73,13 @@ public enum Supertonic3MultiArray {
+             for i in 0..<n {
+                 out[i] = Float(src[i])
+             }
++        #if compiler(>=6.2)
++        case .int8:
++            let src = arr.dataPointer.bindMemory(to: Int8.self, capacity: n)
++            for i in 0..<n {
++                out[i] = Float(src[i])
++            }
++        #endif
+         @unknown default:
+             for i in 0..<n {
+                 out[i] = arr[i].floatValue

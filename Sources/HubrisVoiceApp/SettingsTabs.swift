@@ -4,6 +4,12 @@ import SwiftUI
 
 struct GeneralSettingsTab: View {
   @ObservedObject var model: AppModel
+  @ObservedObject private var localModels: LocalModelsController
+
+  init(model: AppModel) {
+    self.model = model
+    localModels = model.localModels
+  }
 
   var body: some View {
     Form {
@@ -13,7 +19,11 @@ struct GeneralSettingsTab: View {
             Circle()
               .fill(model.statusColor)
               .frame(width: 9, height: 9)
-            Button("Reconnect") { model.reconnect() }
+            if localModels.engine == .openAI {
+              Button("Reconnect") { model.reconnect() }
+            } else {
+              Text(localModels.loadState.title).font(.caption)
+            }
           }
         }
       }
@@ -69,6 +79,9 @@ struct GeneralSettingsTab: View {
   }
 
   private var connectionCaption: String {
+    if localModels.engine == .fluidAudio {
+      return "Parakeet Unified · English · On-device · \(localModels.entries.count) local dictionary terms"
+    }
     let terms = model.dictionaryWords.count
     let termLabel = "\(terms) dictionary term\(terms == 1 ? "" : "s")"
     let languages = model.languages
@@ -77,203 +90,6 @@ struct GeneralSettingsTab: View {
       }
       .joined(separator: ", ")
     return "\(RealtimeAPI.transcriptionModel) · \(termLabel) · \(languages.isEmpty ? "Auto language" : languages)"
-  }
-}
-
-struct DictationSettingsTab: View {
-  @ObservedObject var model: AppModel
-
-  var body: some View {
-    Form {
-      Section("OpenAI") {
-        SettingsRow(
-          title: "API key",
-          caption: "Stored in your login Keychain. Audio is sent directly to OpenAI."
-        ) {
-          HStack {
-            SecureField("API key", text: $model.apiKeyDraft)
-              .textFieldStyle(.roundedBorder)
-              .frame(width: 220)
-              .onSubmit { model.saveAPIKey() }
-            Button("Save") { model.saveAPIKey() }
-              .buttonStyle(.borderedProminent)
-          }
-        }
-        if let message = model.settingsMessage {
-          Text(message)
-            .font(.caption)
-            .foregroundStyle(model.errorMessage == nil ? .secondary : Color.voiceCoral)
-        }
-        SettingsRow(
-          title: "Languages",
-          caption: "Hints for the model. Pick the ones you actually speak."
-        ) {
-          LanguagePicker(selection: $model.languages)
-        }
-      }
-      Section {
-        TextEditor(text: $model.prompt)
-          .font(.system(.body, design: .rounded))
-          .frame(minHeight: 72)
-        HStack {
-          Text("Applied live with a short delay. No reconnect needed.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          Spacer()
-          configurationBadge
-        }
-      } header: {
-        Text("Transcription context")
-      }
-      Section("Insertion") {
-        SettingsRow(
-          title: "Smart leading space",
-          caption: "Adds a space before the text when the caret follows a word."
-        ) {
-          Toggle("Smart leading space", isOn: $model.smartLeadingSpace).labelsHidden()
-        }
-        SettingsRow(title: "Trailing space") {
-          Toggle("Trailing space", isOn: $model.trailingSpace).labelsHidden()
-        }
-        SettingsRow(
-          title: "Adjust case after commas",
-          caption: "Lowercases the first word after a comma. Skips dictionary terms, \"I\", and words with internal capitals."
-        ) {
-          Toggle("Adjust case after commas", isOn: $model.adjustCaseAfterComma).labelsHidden()
-        }
-      }
-      Section("Audio") {
-        SettingsRow(
-          title: "Input device",
-          caption: "Falls back to the system default when the device is missing."
-        ) {
-          Picker("Input device", selection: $model.inputDeviceUID) {
-            Text("System default").tag(String?.none)
-            ForEach(model.inputDevices, id: \.uid) { device in
-              Text(device.name).tag(String?.some(device.uid))
-            }
-          }
-          .labelsHidden()
-          .frame(width: 220)
-        }
-      }
-    }
-    .formStyle(.grouped)
-    .onAppear { model.refreshInputDevices() }
-  }
-
-  @ViewBuilder
-  private var configurationBadge: some View {
-    switch model.configurationState {
-    case .applied: StatusBadge(text: "Applied", tone: .positive)
-    case .pending: StatusBadge(text: "Applying…", tone: .neutral)
-    case .failed(let message): StatusBadge(text: message, tone: .attention)
-    }
-  }
-}
-
-private struct LanguagePicker: View {
-  @Binding var selection: [String]
-
-  var body: some View {
-    HStack(spacing: 6) {
-      ForEach(selection, id: \.self) { code in
-        Text(name(for: code))
-          .font(.caption)
-          .padding(.horizontal, 8)
-          .padding(.vertical, 3)
-          .background(Color.signalBlue.opacity(0.14), in: Capsule())
-      }
-      Menu {
-        ForEach(RealtimeSessionConfiguration.supportedLanguages, id: \.code) { language in
-          Button {
-            toggle(language.code)
-          } label: {
-            if selection.contains(language.code) {
-              Label(language.name, systemImage: "checkmark")
-            } else {
-              Text(language.name)
-            }
-          }
-        }
-      } label: {
-        Image(systemName: "plus.circle")
-      }
-      .menuStyle(.borderlessButton)
-      .fixedSize()
-    }
-  }
-
-  private func name(for code: String) -> String {
-    RealtimeSessionConfiguration.supportedLanguages.first { $0.code == code }?.name ?? code
-  }
-
-  private func toggle(_ code: String) {
-    if let index = selection.firstIndex(of: code) {
-      guard selection.count > 1 else { return }
-      selection.remove(at: index)
-    } else {
-      selection.append(code)
-    }
-  }
-}
-
-struct DictionarySettingsTab: View {
-  @ObservedObject var model: AppModel
-
-  var body: some View {
-    Form {
-      Section {
-        if model.dictionaryWords.isEmpty {
-          Text(
-            "Add product names, people, acronyms, or phrases. Terms are sent as transcription keywords and applied live."
-          )
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        } else {
-          LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 120), spacing: 8)],
-            alignment: .leading,
-            spacing: 8
-          ) {
-            ForEach(model.dictionaryWords, id: \.self) { word in
-              HStack(spacing: 6) {
-                Text(word)
-                  .font(.system(.caption, design: .monospaced))
-                  .lineLimit(1)
-                Spacer(minLength: 2)
-                Button {
-                  model.removeDictionaryWord(word)
-                } label: {
-                  Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Remove \(word)")
-              }
-              .padding(.horizontal, 9)
-              .padding(.vertical, 6)
-              .background(Color.signalBlue.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
-            }
-          }
-        }
-        HStack {
-          TextField("Add a word or phrase", text: $model.newDictionaryWord)
-            .textFieldStyle(.roundedBorder)
-            .onSubmit { model.addDictionaryWord() }
-          Button("Add") { model.addDictionaryWord() }
-            .disabled(model.newDictionaryWord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        }
-        if let message = model.settingsMessage, model.errorMessage == nil {
-          Text(message)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-      } header: {
-        Text("Terms · \(model.dictionaryWords.count)")
-      }
-    }
-    .formStyle(.grouped)
   }
 }
 

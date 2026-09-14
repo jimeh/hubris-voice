@@ -1,0 +1,257 @@
+{
+  "distractors": [
+    "CRAN",
+    "Snyk",
+    "Phoenix",
+    "Quexal",
+    "Torvane",
+    "Kubernetes",
+    "PostgreSQL",
+    "TensorRT",
+    "GraphQL",
+    "NumPy",
+    "PyTorch",
+    "Terraform",
+    "WebSocket",
+    "Redis",
+    "SQLite",
+    "FastAPI",
+    "CloudKit",
+    "AppKit",
+    "SwiftUI",
+    "URLSession",
+    "user_id",
+    "DictationSession",
+    "Rust",
+    "Cargo",
+    "Bun",
+    "Helm",
+    "Flux",
+    "Temporal",
+    "Prisma",
+    "Supabase"
+  ],
+  "recordings": [
+    {
+      "id": "technical",
+      "spoken": "Deploy Kubernetes with PostgreSQL, then inspect the WebSocket connection.",
+      "expected": "Deploy Kubernetes with PostgreSQL, then inspect the WebSocket connection.",
+      "terms": [
+        "Kubernetes",
+        "PostgreSQL",
+        "WebSocket"
+      ],
+      "aliases": {},
+      "voice": "Daniel",
+      "file": "Daniel-technical.wav",
+      "seconds": 5.08775,
+      "sha256": "bb87e18e91586684f43c6b11db74b1b133b3a5bd3f350a0f376ac591e6b909f7"
+    },
+    {
+      "id": "identifiers",
+      "spoken": "Use U R L session to fetch the user I D, then reset the dictation session.",
+      "expected": "Use URLSession to fetch the user_id, then reset the DictationSession.",
+      "terms": [
+        "URLSession",
+        "user_id",
+        "DictationSession"
+      ],
+      "aliases": {
+        "URLSession": [
+          "U R L session",
+          "URL session"
+        ],
+        "user_id": [
+          "user I D",
+          "user ID"
+        ],
+        "DictationSession": [
+          "dictation session"
+        ]
+      },
+      "voice": "Daniel",
+      "file": "Daniel-identifiers.wav",
+      "seconds": 5.20225,
+      "sha256": "fe0beac3f5cfaadfda2186ad56dea6148cae10cb5448f7062d57ca9ead94a21f"
+    },
+    {
+      "id": "names",
+      "spoken": "Send the report to Torvane and ask Quexal to review the changes.",
+      "expected": "Send the report to Torvane and ask Quexal to review the changes.",
+      "terms": [
+        "Torvane",
+        "Quexal"
+      ],
+      "aliases": {},
+      "voice": "Daniel",
+      "file": "Daniel-names.wav",
+      "seconds": 3.84375,
+      "sha256": "fe0c0d4dd7cab0bec81e61233e303ff45afd540137cd8074b83e457981162656"
+    },
+    {
+      "id": "brands",
+      "spoken": "Open Hubris Voice on mac O S and check the Tensor R T integration.",
+      "expected": "Open Hubris Voice on macOS and check the TensorRT integration.",
+      "terms": [
+        "Hubris Voice",
+        "macOS",
+        "TensorRT"
+      ],
+      "aliases": {
+        "macOS": [
+          "mac O S",
+          "mac OS"
+        ],
+        "TensorRT": [
+          "Tensor R T"
+        ]
+      },
+      "voice": "Daniel",
+      "file": "Daniel-brands.wav",
+      "seconds": 4.37475,
+      "sha256": "a08cb60caf853aaad5e925cda023ffa55077c0a4e870b397c867e84adfe81aa1"
+    },
+    {
+      "id": "ordinary",
+      "spoken": "We ran the job today. Please sync the files, bring a warm bun, and put the cargo beside the door.",
+      "expected": "We ran the job today. Please sync the files, bring a warm bun, and put the cargo beside the door.",
+      "terms": [],
+      "aliases": {},
+      "voice": "Daniel",
+      "file": "Daniel-ordinary.wav",
+      "seconds": 6.55025,
+      "sha256": "6ff766c12e2ca646923d59e8fd2892b90f7893bc1ddfd307b42f4260ce23f58d"
+    },
+    {
+      "id": "long",
+      "spoken": "Before we deploy the next release, I want to review the changes carefully. The first task is to check the documentation and make sure every example still works. After that we should run the tests and examine any unexpected results. Finally, update the PostgreSQL connection and ask Torvane to verify the Kubernetes deployment.",
+      "expected": "Before we deploy the next release, I want to review the changes carefully. The first task is to check the documentation and make sure every example still works. After that we should run the tests and examine any unexpected results. Finally, update the PostgreSQL connection and ask Torvane to verify the Kubernetes deployment.",
+      "terms": [
+        "PostgreSQL",
+        "Torvane",
+        "Kubernetes"
+      ],
+      "aliases": {},
+      "voice": "Daniel",
+      "file": "Daniel-long.wav",
+      "seconds": 20.42825,
+      "sha256": "bd3a5ff807d744213492dba52039c4e4cd2a5ccb26786fe62aa9723d74fc5d9d"
+    },
+    {
+      "id": "technical",
+      "spoken": "Deploy Kubernetes with PostgreSQL, then inspect the WebSocket connection.",
+      "expected": "Deploy Kubernetes with PostgreSQL, then inspect the WebSocket connection.",
+      "terms": [
+        "Kubernetes",
+        "PostgreSQL",
+        "WebSocket"
+      ],
+      "aliases": {},
+      "voice": "Samantha",
+      "file": "Samantha-technical.wav",
+      "seconds": 4.8255625,
+      "sha256": "bb7d4852ac99fb8c747080cdd9dbb576e0ef9609932f8165fead708e7e81fa99"
+    },
+    {
+      "id": "identifiers",
+      "spoken": "Use U R L session to fetch the user I D, then reset the dictation session.",
+      "expected": "Use URLSession to fetch the user_id, then reset the DictationSession.",
+      "terms": [
+        "URLSession",
+        "user_id",
+        "DictationSession"
+      ],
+      "aliases": {
+        "URLSession": [
+          "U R L session",
+          "URL session"
+        ],
+        "user_id": [
+          "user I D",
+          "user ID"
+        ],
+        "DictationSession": [
+          "dictation session"
+        ]
+      },
+      "voice": "Samantha",
+      "file": "Samantha-identifiers.wav",
+      "seconds": 4.7758125,
+      "sha256": "3554e6a15ebae98da7d93346a27529160d6ee7feeb1e65ad71434763087c07b8"
+    },
+    {
+      "id": "names",
+      "spoken": "Send the report to Torvane and ask Quexal to review the changes.",
+      "expected": "Send the report to Torvane and ask Quexal to review the changes.",
+      "terms": [
+        "Torvane",
+        "Quexal"
+      ],
+      "aliases": {},
+      "voice": "Samantha",
+      "file": "Samantha-names.wav",
+      "seconds": 3.7180625,
+      "sha256": "220bd7e4cb0bebb8af774f6a2ac947a0def3d7fab70de28187c2dc362680f326"
+    },
+    {
+      "id": "brands",
+      "spoken": "Open Hubris Voice on mac O S and check the Tensor R T integration.",
+      "expected": "Open Hubris Voice on macOS and check the TensorRT integration.",
+      "terms": [
+        "Hubris Voice",
+        "macOS",
+        "TensorRT"
+      ],
+      "aliases": {
+        "macOS": [
+          "mac O S",
+          "mac OS"
+        ],
+        "TensorRT": [
+          "Tensor R T"
+        ]
+      },
+      "voice": "Samantha",
+      "file": "Samantha-brands.wav",
+      "seconds": 4.3121875,
+      "sha256": "2fdee3a91c5f0ee27dac8e18662018ba68dc8c4b03ba4f3e0f77e057e40f8ce3"
+    },
+    {
+      "id": "ordinary",
+      "spoken": "We ran the job today. Please sync the files, bring a warm bun, and put the cargo beside the door.",
+      "expected": "We ran the job today. Please sync the files, bring a warm bun, and put the cargo beside the door.",
+      "terms": [],
+      "aliases": {},
+      "voice": "Samantha",
+      "file": "Samantha-ordinary.wav",
+      "seconds": 6.06275,
+      "sha256": "0d4ea07aef402f8736149d43c1af1d9aca84dbd7da8bcd43f24d46c4173896aa"
+    },
+    {
+      "id": "long",
+      "spoken": "Before we deploy the next release, I want to review the changes carefully. The first task is to check the documentation and make sure every example still works. After that we should run the tests and examine any unexpected results. Finally, update the PostgreSQL connection and ask Torvane to verify the Kubernetes deployment.",
+      "expected": "Before we deploy the next release, I want to review the changes carefully. The first task is to check the documentation and make sure every example still works. After that we should run the tests and examine any unexpected results. Finally, update the PostgreSQL connection and ask Torvane to verify the Kubernetes deployment.",
+      "terms": [
+        "PostgreSQL",
+        "Torvane",
+        "Kubernetes"
+      ],
+      "aliases": {},
+      "voice": "Samantha",
+      "file": "Samantha-long.wav",
+      "seconds": 19.394375,
+      "sha256": "781b275fc3c60293d10096128eaf78eb91861f84bcc19bacded4fb4ef7c1bbf1"
+    },
+    {
+      "id": "silence",
+      "spoken": "",
+      "expected": "",
+      "terms": [],
+      "aliases": {},
+      "voice": "none",
+      "file": "silence.wav",
+      "seconds": 3,
+      "sha256": "d303811b8c84619667cd0501342f84ec6cbe69f7aa3856dcf52fabda374c92b8"
+    }
+  ]
+}

@@ -26,7 +26,9 @@ the live API, [assumed] not yet confirmed either way.
   it.
 - [assumed] Realtime sessions have a finite maximum lifetime and drop on
   idle. Treat every socket as one that will close, and reconnect with
-  backoff. `DictationSession` owns that policy.
+  backoff. The OpenAI backend owns that provider-specific policy and replay;
+  the generic dictation reducer observes readiness, transcript, and failure
+  events and performs common invocation cleanup.
 
 ## Session configuration
 
@@ -96,8 +98,10 @@ the live API, [assumed] not yet confirmed either way.
 - [observed] With `turn_detection: null`, deltas stream while audio is still
   being appended, before any commit. The `item_id` on those live deltas is
   the same id later reported by `input_audio_buffer.committed` for that
-  turn. The live preview depends on this: the listening snippet adopts the
-  first delta's `item_id`. Do not assume deltas start at commit.
+  turn. The live preview depends on this: the OpenAI adapter associates a
+  pre-commit `item_id` with its active invocation only while that association is
+  unambiguous; otherwise it buffers the delta. Do not assume deltas start at
+  commit.
 - [docs] `conversation.item.input_audio_transcription.completed` carries the
   final `transcript` for an `item_id`. The app inserts only this text, never
   partials.
@@ -105,7 +109,9 @@ the live API, [assumed] not yet confirmed either way.
   replayed audio from scratch under a new `item_id`. Partial text from the
   old socket must be discarded, not appended to.
 - [observed] `error` server events can arrive without the socket closing.
-  The client keeps the connection; the session presents the message.
+  The client normally keeps the connection and presents the message. If an
+  error cannot be correlated while a commit is pending, the adapter replaces
+  the connection before replaying the next queued recording.
 
 ## Things not yet verified
 
@@ -114,3 +120,37 @@ the live API, [assumed] not yet confirmed either way.
 - Exact session lifetime and idle limits for transcription intent.
 - Whether `keywords` has a documented maximum count or length beyond the
   app's own 80-character entry cap.
+
+## Application boundary
+
+`OpenAITranscriptionBackend` owns transport attempts, item IDs, pre-commit
+previews, commit rejection correlation, cancelled ACK tombstones, and replay.
+It emits full preview replacements and final results addressed by backend epoch
+and invocation generation. `DictationSession` handles those common events and
+owns gestures, timeouts, pending work, and insertion decisions for both engines.
+Cloud configuration accepts only `RealtimeSessionConfiguration`; local
+vocabulary and ephemeral context are separate types and persistence keys.
+
+The adapter completes an invocation that retained no audio locally with an empty
+final result instead of sending a commit that the server will reject. It sends
+only one invocation through OpenAI at a time, retaining later recordings locally
+until the active invocation completes or is retired. This avoids relying on an
+undocumented ordering relationship between several outstanding commit
+acknowledgements. A successful acknowledgement must agree with any item ID
+already inferred from live deltas; a conflict replaces the connection rather
+than assigning text speculatively.
+
+While a commit awaits its item ID, the adapter keeps unknown pre-commit deltas in
+a bounded item-ID buffer. Overflow disables inferred binding until reconnect and
+drops unmatched preview deltas. Known items can still emit previews, exact
+acknowledgements can flush buffered text, and completed transcripts remain
+authoritative. If a server error cannot be correlated while a commit is pending,
+the sole active invocation fails and the connection is replaced before the next
+queued recording is replayed.
+
+Reconnect clears attempt-local correlation, rejects late events bearing the old
+attempt ID, and replays the active invocation from its retained chunks. If an
+input that sent audio is cancelled or retired before its provider item is known,
+the adapter also replaces the connection before activating the next recording.
+The new attempt restores live preview inference without assuming that a
+buffer-clear event orders earlier asynchronous transcription work.

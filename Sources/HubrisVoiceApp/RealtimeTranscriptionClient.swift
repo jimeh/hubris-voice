@@ -1,15 +1,34 @@
 import Foundation
 import HubrisVoiceCore
 
-private struct RealtimeOutboundAction: Sendable {
+struct RealtimeOutboundAction: Sendable {
   enum Payload: Sendable {
     case append(Data)
     case commit(String)
     case clear
+    case replay(chunks: [Data], commitEventID: String?)
   }
 
   let attemptID: String?
   let payload: Payload
+
+  var clientEvents: [RealtimeClientEvent] {
+    switch payload {
+    case .append(let data):
+      [.appendAudio(data)]
+    case .commit(let eventID):
+      [.commitAudio(eventID: eventID)]
+    case .clear:
+      [.clearAudio]
+    case .replay(let chunks, let commitEventID):
+      chunks.map(RealtimeClientEvent.appendAudio)
+        + (commitEventID.map { [.commitAudio(eventID: $0)] } ?? [])
+    }
+  }
+}
+
+struct RealtimeReplayReceipt: Sendable {
+  let commitEventID: String?
 }
 
 struct RealtimeTransportEvent: Equatable, Sendable {
@@ -152,7 +171,7 @@ private final class RealtimeWebSocketDelegate:
 final class RealtimeOutboundPipe: @unchecked Sendable {
   private let continuation: AsyncStream<RealtimeOutboundAction>.Continuation
 
-  fileprivate init(
+  init(
     continuation: AsyncStream<RealtimeOutboundAction>.Continuation
   ) {
     self.continuation = continuation
@@ -167,31 +186,38 @@ final class RealtimeOutboundPipe: @unchecked Sendable {
     self.attemptID = attemptID
   }
 
-  private func enqueue(_ payload: RealtimeOutboundAction.Payload) {
+  private func enqueue(_ payload: RealtimeOutboundAction.Payload) -> Bool {
     lock.lock()
     defer { lock.unlock() }
-    continuation.yield(RealtimeOutboundAction(attemptID: attemptID, payload: payload))
+    switch continuation.yield(RealtimeOutboundAction(attemptID: attemptID, payload: payload)) {
+    case .enqueued:
+      return true
+    case .dropped, .terminated:
+      return false
+    @unknown default:
+      return false
+    }
   }
 
-  func appendAudio(_ data: Data) {
+  func appendAudio(_ data: Data) -> Bool {
     enqueue(.append(data))
   }
 
-  @discardableResult
-  func commitAudio() -> String {
+  func commitAudio() -> String? {
     let eventID = UUID().uuidString
-    enqueue(.commit(eventID))
-    return eventID
+    return enqueue(.commit(eventID)) ? eventID : nil
   }
 
-  func clearAudio() {
+  func clearAudio() -> Bool {
     enqueue(.clear)
   }
 
-  func replay(_ chunks: [Data]) {
-    for chunk in chunks {
-      enqueue(.append(chunk))
+  func replay(_ chunks: [Data], commit: Bool) -> RealtimeReplayReceipt? {
+    let commitEventID = commit ? UUID().uuidString : nil
+    guard enqueue(.replay(chunks: chunks, commitEventID: commitEventID)) else {
+      return nil
     }
+    return RealtimeReplayReceipt(commitEventID: commitEventID)
   }
 }
 
@@ -226,26 +252,28 @@ actor RealtimeTranscriptionClient {
   private var isReady = false
   private var activeAttemptID: String?
   private var didLogDroppedOutbound = false
+  private let consumesOutboundActions: Bool
 
-  init() {
+  init(outboundCapacity: Int = 512, consumesOutboundActions: Bool = true) {
+    self.consumesOutboundActions = consumesOutboundActions
     let outboundPair = AsyncStream.makeStream(
       of: RealtimeOutboundAction.self,
-      bufferingPolicy: .unbounded
+      bufferingPolicy: .bufferingOldest(outboundCapacity)
     )
     outbound = RealtimeOutboundPipe(
       continuation: outboundPair.continuation
     )
     outboundStream = outboundPair.stream
 
-    let eventPair = AsyncStream.makeStream(
-      of: RealtimeTransportEvent.self,
-      bufferingPolicy: .bufferingNewest(100)
-    )
+    // This stream carries text and control events, not audio. Keep it lossless:
+    // dropping an ACK, error, or final would strand an invocation.
+    let eventPair = AsyncStream.makeStream(of: RealtimeTransportEvent.self)
     events = eventPair.stream
     eventContinuation = eventPair.continuation
   }
 
   func start() {
+    guard consumesOutboundActions else { return }
     guard outboundTask == nil else {
       return
     }
@@ -470,13 +498,11 @@ actor RealtimeTranscriptionClient {
       throw ClientError.notConnected
     }
 
-    switch action.payload {
-    case .append(let data):
-      try await send(.appendAudio(data), through: socket)
-    case .commit(let eventID):
-      try await send(.commitAudio(eventID: eventID), through: socket)
-    case .clear:
-      try await send(.clearAudio, through: socket)
+    for event in action.clientEvents {
+      guard action.attemptID == activeAttemptID else {
+        throw CancellationError()
+      }
+      try await send(event, through: socket)
     }
   }
 

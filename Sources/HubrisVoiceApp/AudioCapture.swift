@@ -13,9 +13,9 @@ final class AudioCapture: @unchecked Sendable {
     var errorDescription: String? {
       switch self {
       case .converterUnavailable:
-        "The microphone format cannot be converted to 24 kHz PCM."
+        "The microphone format cannot be converted to the selected PCM format."
       case .targetFormatUnavailable:
-        "The 24 kHz PCM audio format could not be created."
+        "The selected PCM audio format could not be created."
       case .audioUnitUnavailable:
         "The microphone audio unit is unavailable."
       case .deviceUnavailable(let uid):
@@ -47,10 +47,12 @@ final class AudioCapture: @unchecked Sendable {
 
   private let engine = AVAudioEngine()
   private let lock = NSRecursiveLock()
+  private let conversionLock = NSLock()
   private let deviceListenerQueue = DispatchQueue(
     label: "\(AppIdentity.bundleIdentifier).audio-devices"
   )
-  private var converter: AVAudioConverter?
+  private var converter: PCMConverter?
+  private var sampleRate: Double = 24_000
   private var targetFormat: AVAudioFormat?
   private var storedPreferredDeviceUID: String?
   private(set) var isRunning = false
@@ -77,10 +79,11 @@ final class AudioCapture: @unchecked Sendable {
     removeDeviceListeners()
   }
 
-  func start() throws {
+  func start(sampleRate: Double = 24_000) throws {
     lock.lock()
     defer { lock.unlock() }
     guard !isRunning else { return }
+    self.sampleRate = sampleRate
     try configureAndStart(preferredUID: storedPreferredDeviceUID)
     isRunning = true
   }
@@ -90,7 +93,22 @@ final class AudioCapture: @unchecked Sendable {
     defer { lock.unlock() }
     guard isRunning else { return }
     isRunning = false
-    removeTapAndStop()
+    removeTapAndStop(drain: true)
+  }
+
+  /// Ends the previous snippet without restarting the hardware input engine.
+  func finishSegment() {
+    conversionLock.lock()
+    defer { conversionLock.unlock() }
+    guard let converter else { return }
+    do {
+      let tail = try converter.finishAndReset()
+      if !tail.isEmpty {
+        onChunk?(tail)
+      }
+    } catch {
+      onError?("The final microphone audio could not be converted.")
+    }
   }
 
   static func availableInputDevices() -> [(uid: String, name: String)] {
@@ -115,21 +133,24 @@ final class AudioCapture: @unchecked Sendable {
       try select(deviceID: deviceID, on: input)
     }
     let sourceFormat = input.outputFormat(forBus: 0)
-    let components = try makeConverter(from: sourceFormat)
-    converter = components.converter
-    targetFormat = components.targetFormat
+    let components = try PCMConverter(sourceFormat: sourceFormat, sampleRate: sampleRate)
+    conversionLock.lock()
+    converter = components
+    conversionLock.unlock()
+    targetFormat = components.outputFormat
     installTap(
       on: input,
       sourceFormat: sourceFormat,
-      converter: components.converter,
-      targetFormat: components.targetFormat
+      converter: components
     )
     do {
       engine.prepare()
       try engine.start()
     } catch {
       removeTap(from: input)
+      conversionLock.lock()
       converter = nil
+      conversionLock.unlock()
       targetFormat = nil
       throw error
     }
@@ -170,40 +191,32 @@ final class AudioCapture: @unchecked Sendable {
     }
   }
 
-  private func makeConverter(
-    from sourceFormat: AVAudioFormat
-  ) throws -> (converter: AVAudioConverter, targetFormat: AVAudioFormat) {
-    guard
-      let targetFormat = AVAudioFormat(
-        commonFormat: .pcmFormatInt16,
-        sampleRate: 24_000,
-        channels: 1,
-        interleaved: false
-      )
-    else {
-      throw CaptureError.targetFormatUnavailable
-    }
-    guard let converter = AVAudioConverter(from: sourceFormat, to: targetFormat) else {
-      throw CaptureError.converterUnavailable
-    }
-    return (converter, targetFormat)
-  }
-
   private func installTap(
     on input: AVAudioInputNode,
     sourceFormat: AVAudioFormat,
-    converter: AVAudioConverter,
-    targetFormat: AVAudioFormat
+    converter: PCMConverter
   ) {
     input.installTap(onBus: 0, bufferSize: 1_024, format: sourceFormat) { [weak self] buffer, _ in
-      self?.process(buffer, converter: converter, targetFormat: targetFormat)
+      self?.process(buffer, converter: converter)
     }
     isTapInstalled = true
   }
 
-  private func removeTapAndStop() {
+  private func removeTapAndStop(drain: Bool = true) {
     removeTap(from: engine.inputNode)
     engine.stop()
+    conversionLock.lock()
+    defer { conversionLock.unlock() }
+    if drain, let converter {
+      do {
+        let tail = try converter.finish()
+        if !tail.isEmpty {
+          onChunk?(tail)
+        }
+      } catch {
+        onError?("The final microphone audio could not be converted.")
+      }
+    }
     converter = nil
     targetFormat = nil
   }
@@ -232,35 +245,19 @@ final class AudioCapture: @unchecked Sendable {
     }
   }
 
-  private func process(
-    _ buffer: AVAudioPCMBuffer,
-    converter: AVAudioConverter,
-    targetFormat: AVAudioFormat
-  ) {
+  private func process(_ buffer: AVAudioPCMBuffer, converter: PCMConverter) {
+    conversionLock.lock()
+    defer { conversionLock.unlock() }
+    guard self.converter === converter else { return }
     onLevel?(level(for: buffer))
-    let ratio = targetFormat.sampleRate / buffer.format.sampleRate
-    let capacity = AVAudioFrameCount(max(1, ceil(Double(buffer.frameLength) * ratio) + 1))
-    guard let converted = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else {
-      return
-    }
-    let inputProvider = ConverterInput(buffer: buffer)
-    var conversionError: NSError?
-    let status = converter.convert(to: converted, error: &conversionError) { _, inputStatus in
-      inputProvider.next(status: inputStatus)
-    }
-    guard
-      status != .error,
-      conversionError == nil,
-      converted.frameLength > 0,
-      let samples = converted.int16ChannelData?.pointee
-    else {
-      if let conversionError {
-        onError?(conversionError.localizedDescription)
+    do {
+      let data = try converter.append(buffer)
+      if !data.isEmpty {
+        onChunk?(data)
       }
-      return
+    } catch {
+      onError?("The microphone audio could not be converted.")
     }
-    let byteCount = Int(converted.frameLength) * MemoryLayout<Int16>.size
-    onChunk?(Data(bytes: samples, count: byteCount))
   }
 
   private func level(for buffer: AVAudioPCMBuffer) -> Float {
@@ -418,27 +415,5 @@ final class AudioCapture: @unchecked Sendable {
     ) == noErr else { return 0 }
     let list = rawBuffer.assumingMemoryBound(to: AudioBufferList.self)
     return UnsafeMutableAudioBufferListPointer(list).reduce(0) { $0 + $1.mNumberChannels }
-  }
-}
-
-private final class ConverterInput: @unchecked Sendable {
-  private let buffer: AVAudioPCMBuffer
-  private let lock = NSLock()
-  private var hasSuppliedBuffer = false
-
-  init(buffer: AVAudioPCMBuffer) {
-    self.buffer = buffer
-  }
-
-  func next(status: UnsafeMutablePointer<AVAudioConverterInputStatus>) -> AVAudioBuffer? {
-    lock.lock()
-    defer { lock.unlock() }
-    if hasSuppliedBuffer {
-      status.pointee = .noDataNow
-      return nil
-    }
-    hasSuppliedBuffer = true
-    status.pointee = .haveData
-    return buffer
   }
 }

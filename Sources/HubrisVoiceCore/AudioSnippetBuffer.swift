@@ -18,6 +18,12 @@ public struct AudioSnippetBuffer: Equatable, Sendable {
     self.capacityBytes = capacityBytes
   }
 
+  public init(sampleRate: Int, maximumDuration: Int = 90) {
+    precondition(sampleRate == 16_000 || sampleRate == 24_000)
+    precondition(maximumDuration >= 0 && maximumDuration <= 90)
+    self.init(capacityBytes: sampleRate * MemoryLayout<Int16>.size * maximumDuration)
+  }
+
   public mutating func append(_ chunk: Data) -> AppendResult {
     guard !isFull, chunk.count <= capacityBytes - byteCount else {
       isFull = true

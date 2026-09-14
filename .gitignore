@@ -1,6 +1,7 @@
 .DS_Store
 .build/
 .native/
+node_modules/
 dist/
 .swiftpm/
 DerivedData/

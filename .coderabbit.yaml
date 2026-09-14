@@ -1,0 +1,7 @@
+# Review the integration and the verified vendor patch, rather than every file
+# in the pinned upstream snapshot. mise run lint:vendor verifies that snapshot.
+reviews:
+  path_filters:
+    - "**"
+    - "!Vendor/FluidAudio/Sources/**"
+    - "!Vendor/FluidAudio/ThirdPartyLicenses/**"

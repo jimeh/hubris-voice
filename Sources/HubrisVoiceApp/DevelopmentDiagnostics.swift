@@ -19,9 +19,10 @@ enum DevelopmentDiagnostics {
 final class DevelopmentTrace {
   static let shared = DevelopmentTrace()
   private var handle: FileHandle?
+  var localTranscriptionSelected = false
 
   func record(_ message: @autoclosure () -> String) {
-    guard DevelopmentDiagnostics.traceEnabled else { return }
+    guard DevelopmentDiagnostics.traceEnabled, !localTranscriptionSelected else { return }
     do {
       if handle == nil {
         let directory = FileManager.default.homeDirectoryForCurrentUser

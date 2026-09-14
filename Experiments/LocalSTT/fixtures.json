@@ -1,0 +1,12 @@
+{
+  "voices": ["Daniel", "Samantha"],
+  "distractors": ["CRAN", "Snyk", "Phoenix", "Quexal", "Torvane", "Kubernetes", "PostgreSQL", "TensorRT", "GraphQL", "NumPy", "PyTorch", "Terraform", "WebSocket", "Redis", "SQLite", "FastAPI", "CloudKit", "AppKit", "SwiftUI", "URLSession", "user_id", "DictationSession", "Rust", "Cargo", "Bun", "Helm", "Flux", "Temporal", "Prisma", "Supabase"],
+  "cases": [
+    {"id":"technical","spoken":"Deploy Kubernetes with PostgreSQL, then inspect the WebSocket connection.","expected":"Deploy Kubernetes with PostgreSQL, then inspect the WebSocket connection.","terms":["Kubernetes","PostgreSQL","WebSocket"],"aliases":{}},
+    {"id":"identifiers","spoken":"Use U R L session to fetch the user I D, then reset the dictation session.","expected":"Use URLSession to fetch the user_id, then reset the DictationSession.","terms":["URLSession","user_id","DictationSession"],"aliases":{"URLSession":["U R L session","URL session"],"user_id":["user I D","user ID"],"DictationSession":["dictation session"]}},
+    {"id":"names","spoken":"Send the report to Torvane and ask Quexal to review the changes.","expected":"Send the report to Torvane and ask Quexal to review the changes.","terms":["Torvane","Quexal"],"aliases":{}},
+    {"id":"brands","spoken":"Open Hubris Voice on mac O S and check the Tensor R T integration.","expected":"Open Hubris Voice on macOS and check the TensorRT integration.","terms":["Hubris Voice","macOS","TensorRT"],"aliases":{"macOS":["mac O S","mac OS"],"TensorRT":["Tensor R T"]}},
+    {"id":"ordinary","spoken":"We ran the job today. Please sync the files, bring a warm bun, and put the cargo beside the door.","expected":"We ran the job today. Please sync the files, bring a warm bun, and put the cargo beside the door.","terms":[],"aliases":{}},
+    {"id":"long","spoken":"Before we deploy the next release, I want to review the changes carefully. The first task is to check the documentation and make sure every example still works. After that we should run the tests and examine any unexpected results. Finally, update the PostgreSQL connection and ask Torvane to verify the Kubernetes deployment.","expected":"Before we deploy the next release, I want to review the changes carefully. The first task is to check the documentation and make sure every example still works. After that we should run the tests and examine any unexpected results. Finally, update the PostgreSQL connection and ask Torvane to verify the Kubernetes deployment.","terms":["PostgreSQL","Torvane","Kubernetes"],"aliases":{}}
+  ]
+}

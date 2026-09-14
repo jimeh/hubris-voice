@@ -1,7 +1,7 @@
 # Hubris Voice
 
 Hubris Voice is a native macOS proof of concept for push-to-talk dictation with
-OpenAI's `gpt-live-transcribe` model.
+OpenAI's `gpt-live-transcribe` model or on-device Parakeet Unified transcription.
 
 Hold `Control-Shift-Space` to record. A small non-activating pill next to the
 field you are dictating into shows the live transcript and a mic-level
@@ -18,6 +18,8 @@ for manual paste. The previous clipboard is restored unless another copy has rep
 
 - One warm Realtime WebSocket with automatic reconnect and backoff; audio
   recorded while disconnected is replayed once the session is ready
+- Optional English-only on-device streaming on Apple Silicon, with verified model
+  downloads, explicit load/unload controls, and a separate local dictionary
 - Live transcript preview in a pill placed at the caret, with a 1 to 6 line cap
 - Clipboard insertion with best-effort content confirmation and temporary markers
   that keep automatic transcripts out of compatible clipboard histories
@@ -34,7 +36,7 @@ for manual paste. The previous clipboard is restored unless another copy has rep
   transcript and history
 - Launch Services and runtime protection against duplicate app instances
 
-This is a bring-your-own-key developer proof of concept. A distributed product
+The OpenAI engine is a bring-your-own-key developer proof of concept. A distributed product
 should issue ephemeral client credentials from a backend instead of shipping or
 accepting a long-lived project key in the client.
 
@@ -55,9 +57,15 @@ The bundle is written to:
 .build/artifacts/Hubris Voice.app
 ```
 
-The application source has no package dependencies. Ordinary builds and tests
-do not connect to OpenAI or include third-party code. Signed distribution builds
-embed the pinned Sparkle framework for self-updates.
+FluidAudio 0.15.7 is vendored with patches for compiler compatibility and to
+disable SDK logging, which otherwise includes vocabulary and transcript text.
+Its source and licenses live in [Vendor/FluidAudio](Vendor/FluidAudio), while
+the checksum-pinned archive provenance, ordered patches, and maintenance
+workflow live in
+[third-party/vendor](third-party/vendor/README.md).
+Builds can fetch its checksum-pinned native binary dependency. Ordinary tests do
+not download speech models or connect to OpenAI.
+Signed distribution builds also embed the pinned Sparkle framework for self-updates.
 
 ### Development signing
 
@@ -106,12 +114,48 @@ Do this when you are available to respond to macOS and firewall prompts:
 
 The app does not request system permissions automatically at launch. Permission
 prompts happen only when their Request buttons are clicked. It connects to
-OpenAI automatically on later launches when an API key is already stored, and
-reconnects on its own after sleep or a network change.
+OpenAI automatically on later launches when OpenAI is selected and an API key
+is already stored, and reconnects after sleep or a network change.
 
 Other settings persist as soon as they change. Prompt, dictionary, and non-empty
 language edits reach the live session without a reconnect. Clearing all language
 hints reconnects after active snippets finish.
+
+## On-device transcription
+
+OpenAI remains the default. On Apple Silicon, select **On-device · FluidAudio**
+in Dictation, then download **Parakeet Unified** in Models. The first model is
+English-only and provides live raw previews with finalized text at release.
+No API key is needed. Selecting local mode never falls back to cloud transcription.
+
+The primary download is about 608 MB. Dictionary correction adds about
+103 MB. Download its files in Models. **Local dictionary correction** in Dictation
+defaults to on; a saved off preference is preserved. Local terms have canonical
+spellings and optional spoken aliases. Identifier aliases such as `user underscore ID` for
+`user_id` are generated automatically. Correction only accepts constrained term
+substitutions; it can still make mistakes. If correction fails, usable raw text
+is retained and the Models tab reports degraded correction.
+
+The Dictionary tab edits the selected engine's vocabulary. The local dictionary
+is initially copied from existing OpenAI terms, then stored separately. Local
+entries and aliases never flow back into OpenAI settings. Automatic Accessibility
+window-context collection is not implemented yet.
+
+Downloaded models live under `~/Library/Application Support/Hubris Voice/Models`.
+Downloads stream into owned staging files and must pass pinned size and SHA-256
+checks before installation. FluidAudio receives explicit paths and does not
+download models during transcription. macOS manages its own CoreML/driver caches.
+Model cards and attribution links are available alongside each download.
+
+A selected local model stays loaded while the app runs. **Unload** releases its
+memory and keeps its files and selection. **Load** or the next dictation loads
+it again. **Remove** unloads and deletes the selected assets; it is unavailable
+during active dictation. Engine and dictionary changes wait for listening,
+finalization, and insertion to finish. New recordings cannot indefinitely defer
+an engine change.
+
+See [the local transcription reference](docs/reference/local-transcription.md)
+for implementation boundaries, offline smokes, and remaining manual checks.
 
 ## Development checks
 
@@ -158,6 +202,7 @@ They are for development only; delete them after the investigation. They are not
 rotated automatically. Credentials, audio, and previous clipboard contents are
 not recorded. The normal `realtime.log` remains sanitized.
 
-The debug-only `--development-trace` launch flag enables tracing. It is ignored
+The debug-only `--development-trace` launch flag enables tracing for the OpenAI
+engine. Tracing is suppressed while on-device transcription is selected. It is ignored
 by release builds and never saved in preferences. Quit and relaunch normally to
 disable it. Launching an already-running app does not apply new flags.
