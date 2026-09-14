@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/jimeh/hubris-voice/compare/v0.1.2...v0.2.0) (2026-09-14)
+
+
+### Features
+
+* add on-device transcription with local dictionary support ([#11](https://github.com/jimeh/hubris-voice/issues/11)) ([fa8b6a7](https://github.com/jimeh/hubris-voice/commit/fa8b6a7a6269daa24286dfb99a21deeba2e5db0a))
+
 ## [0.1.2](https://github.com/jimeh/hubris-voice/compare/v0.1.1...v0.1.2) (2026-09-13)
 
 
