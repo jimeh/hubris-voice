@@ -201,8 +201,10 @@ private actor FluidAudioTranscriptionState {
     isReconfiguring = true
     isPrepared = false
     let needsCorrection = correctionPolicy == .strict && !context.resolvedEntries.isEmpty
+    var acquiredCorrectionLease: FluidAudioCorrectionLease?
     if needsCorrection, correctionLease == nil {
-      correctionLease = try? await acquireCorrection()
+      acquiredCorrectionLease = try? await acquireCorrection()
+      correctionLease = acquiredCorrectionLease
     }
     do {
       let correctionDirectory = needsCorrection
@@ -214,19 +216,24 @@ private actor FluidAudioTranscriptionState {
         context: context,
         correctionPolicy: correctionPolicy
       )
-      if !needsCorrection, let correctionLease {
-        self.correctionLease = nil
-        await correctionLease.release()
+      let correctionLeaseToRelease = !needsCorrection ? correctionLease : nil
+      if correctionLeaseToRelease != nil {
+        correctionLease = nil
       }
       isPrepared = true
       isReconfiguring = false
+      await correctionLeaseToRelease?.release()
       pump()
       return true
     } catch {
+      if acquiredCorrectionLease != nil {
+        correctionLease = nil
+      }
       self.context = previousContext
       self.correctionPolicy = previousCorrectionPolicy
       isPrepared = true
       isReconfiguring = false
+      await acquiredCorrectionLease?.release()
       throw TranscriptionFailure(
         kind: .configuration,
         message: "The local correction configuration could not be applied.",

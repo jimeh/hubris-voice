@@ -334,27 +334,16 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
     XCTAssertEqual(latestContext, updatedContext)
   }
 
-  func testDisablingCorrectionReleasesSupplementalLeaseAfterSuccessfulPrepare() async throws {
+  func testCorrectionLeaseReleaseIsRollbackSafeAcrossConfigurationUpdates() async throws {
     let processor = FakeFluidAudioProcessor(
       final: FluidAudioProcessResult(rawText: "unused", candidateText: nil)
     )
-    let releases = ReleaseRecorder()
-    let backend = FluidAudioTranscriptionBackend(
-      context: LocalInvocationContext(permanentEntries: []),
-      correctionPolicy: .disabled,
+    let primaryReleases = ReleaseRecorder()
+    let correctionReleases = ReleaseRecorder()
+    let backend = makeLeaseTrackingBackend(
       processor: processor,
-      acquireModels: { _, _ in
-        FluidAudioModelLease(
-          primaryDirectory: URL(fileURLWithPath: "/owned/primary"),
-          release: {}
-        )
-      },
-      acquireCorrection: {
-        FluidAudioCorrectionLease(
-          directory: URL(fileURLWithPath: "/owned/ctc"),
-          release: { await releases.record() }
-        )
-      }
+      primaryReleases: primaryReleases,
+      correctionReleases: correctionReleases
     )
     let recorder = EventRecorder(stream: backend.events)
     let invocation = makeInvocation(generation: 12)
@@ -366,42 +355,55 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
         false
       }
     }
+
+    await processor.failNextPrepare()
+    do {
+      _ = try await updateConfiguration(backend, entries: ["user_id"], policy: .strict)
+      XCTFail("Expected configuration update failure")
+    } catch is TranscriptionFailure {}
+    let releasesAfterFailedEnable = await correctionReleases.count()
+    let primaryReleasesAfterFailedEnable = await primaryReleases.count()
+    XCTAssertEqual(releasesAfterFailedEnable, 1)
+    XCTAssertEqual(primaryReleasesAfterFailedEnable, 0)
+
     let enabled = try await updateConfiguration(backend, entries: ["user_id"], policy: .strict)
     let enabledDirectory = await processor.latestCorrectionDirectory()
-    let releasesAfterEnable = await releases.count()
+    let releasesAfterEnable = await correctionReleases.count()
     XCTAssertTrue(enabled)
     XCTAssertEqual(enabledDirectory, URL(fileURLWithPath: "/owned/ctc"))
-    XCTAssertEqual(releasesAfterEnable, 0)
+    XCTAssertEqual(releasesAfterEnable, 1)
 
     await processor.failNextPrepare()
     do {
       _ = try await updateConfiguration(backend, entries: [], policy: .strict)
       XCTFail("Expected configuration update failure")
     } catch is TranscriptionFailure {}
-    let releasesAfterFailure = await releases.count()
-    XCTAssertEqual(releasesAfterFailure, 0)
+    let releasesAfterFailure = await correctionReleases.count()
+    XCTAssertEqual(releasesAfterFailure, 1)
 
     let emptied = try await updateConfiguration(backend, entries: [], policy: .strict)
     let emptiedDirectory = await processor.latestCorrectionDirectory()
-    let releasesAfterEmpty = await releases.count()
+    let releasesAfterEmpty = await correctionReleases.count()
     XCTAssertTrue(emptied)
     XCTAssertNil(emptiedDirectory)
-    XCTAssertEqual(releasesAfterEmpty, 1)
+    XCTAssertEqual(releasesAfterEmpty, 2)
 
     let reenabled = try await updateConfiguration(backend, entries: ["user_id"], policy: .strict)
-    let releasesAfterReenable = await releases.count()
+    let releasesAfterReenable = await correctionReleases.count()
     XCTAssertTrue(reenabled)
-    XCTAssertEqual(releasesAfterReenable, 1)
+    XCTAssertEqual(releasesAfterReenable, 2)
 
     let disabled = try await updateConfiguration(backend, entries: ["user_id"], policy: .disabled)
     let disabledDirectory = await processor.latestCorrectionDirectory()
-    let releasesAfterDisable = await releases.count()
+    let releasesAfterDisable = await correctionReleases.count()
     XCTAssertTrue(disabled)
     XCTAssertNil(disabledDirectory)
-    XCTAssertEqual(releasesAfterDisable, 2)
+    XCTAssertEqual(releasesAfterDisable, 3)
     await backend.unload()
-    let releasesAfterUnload = await releases.count()
-    XCTAssertEqual(releasesAfterUnload, 2)
+    let correctionReleasesAfterUnload = await correctionReleases.count()
+    let primaryReleasesAfterUnload = await primaryReleases.count()
+    XCTAssertEqual(correctionReleasesAfterUnload, 3)
+    XCTAssertEqual(primaryReleasesAfterUnload, 1)
   }
 
   func testDisablingInitiallyLoadedCorrectionReleasesItButRetainsPrimary() async throws {
@@ -662,6 +664,30 @@ private func updateConfiguration(
       LocalVocabularyEntry(canonicalText: $0)
     }),
     correctionPolicy: policy
+  )
+}
+
+private func makeLeaseTrackingBackend(
+  processor: FakeFluidAudioProcessor,
+  primaryReleases: ReleaseRecorder,
+  correctionReleases: ReleaseRecorder
+) -> FluidAudioTranscriptionBackend {
+  FluidAudioTranscriptionBackend(
+    context: LocalInvocationContext(permanentEntries: []),
+    correctionPolicy: .disabled,
+    processor: processor,
+    acquireModels: { _, _ in
+      FluidAudioModelLease(
+        primaryDirectory: URL(fileURLWithPath: "/owned/primary"),
+        release: { await primaryReleases.record() }
+      )
+    },
+    acquireCorrection: {
+      FluidAudioCorrectionLease(
+        directory: URL(fileURLWithPath: "/owned/ctc"),
+        release: { await correctionReleases.record() }
+      )
+    }
   )
 }
 

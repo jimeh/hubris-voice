@@ -152,6 +152,7 @@ private actor OpenAITranscriptionState {
   private var bufferedProviderPreviews: [String: BufferedProviderPreview] = [:]
   private var fencedProviderItemIDs: Set<String> = []
   private var didOverflowBufferedProviderItems = false
+  private var isUnknownItemInferenceSuppressed = false
   private var activeInputID: TranscriptionInvocationID?
   private var activeAttemptID: String?
   private var attempt = 0
@@ -376,11 +377,8 @@ private actor OpenAITranscriptionState {
   private func cancel(id: TranscriptionInvocationID) async {
     guard var invocation = invocations[id], !invocation.isCancelled else { return }
     invocation.isCancelled = true
+    suppressUnknownItemInference(for: invocation)
     invocation.chunks.removeAll(keepingCapacity: false)
-    if invocation.itemID == nil {
-      fencedProviderItemIDs.formUnion(bufferedProviderPreviews.keys)
-      bufferedProviderPreviews.removeAll()
-    }
     if let itemID = invocation.itemID {
       retiredItemIDs.insert(itemID)
     }
@@ -601,7 +599,7 @@ private actor OpenAITranscriptionState {
     guard !retiredItemIDs.contains(itemID), !assignedItemIDs.contains(itemID),
           !fencedProviderItemIDs.contains(itemID), !didOverflowBufferedProviderItems
     else { return }
-    guard awaitingCommits.isEmpty else {
+    guard awaitingCommits.isEmpty, !isUnknownItemInferenceSuppressed else {
       bufferProviderPreview(itemID: itemID, delta: delta)
       return
     }
@@ -630,7 +628,8 @@ private actor OpenAITranscriptionState {
   }
 
   private func bindActiveBufferedPreviewIfUnambiguous() {
-    guard !didOverflowBufferedProviderItems, awaitingCommits.isEmpty,
+    guard !didOverflowBufferedProviderItems, !isUnknownItemInferenceSuppressed,
+          awaitingCommits.isEmpty,
           bufferedProviderPreviews.count == 1,
           let itemID = bufferedProviderPreviews.keys.first
     else { return }
@@ -701,6 +700,7 @@ private actor OpenAITranscriptionState {
     bufferedProviderPreviews.removeAll()
     fencedProviderItemIDs.removeAll()
     didOverflowBufferedProviderItems = false
+    isUnknownItemInferenceSuppressed = false
     assignedItemIDs.removeAll()
     retiredItemIDs.removeAll()
     activeInputID = nil
@@ -720,8 +720,14 @@ private actor OpenAITranscriptionState {
     }
   }
 
-  private func retire(_ id: TranscriptionInvocationID) {
+  private func retire(
+    _ id: TranscriptionInvocationID,
+    suppressUnassignedItemInference: Bool = true
+  ) {
     guard let invocation = invocations.removeValue(forKey: id) else { return }
+    if suppressUnassignedItemInference {
+      suppressUnknownItemInference(for: invocation)
+    }
     if let itemID = invocation.itemID {
       retiredItemIDs.insert(itemID)
     }
@@ -730,9 +736,15 @@ private actor OpenAITranscriptionState {
     }
   }
 
+  private func suppressUnknownItemInference(for invocation: Invocation) {
+    if invocation.itemID == nil, invocation.hasAudio {
+      isUnknownItemInferenceSuppressed = true
+    }
+  }
+
   private func completeEmptyInvocation(_ id: TranscriptionInvocationID) {
     guard let invocation = invocations[id], !invocation.isCancelled else { return }
-    retire(id)
+    retire(id, suppressUnassignedItemInference: false)
     eventContinuation.yield(.final(
       id: id,
       result: .init(text: "", correction: .disabled)

@@ -353,11 +353,9 @@ final class AppModelCoordinationTests: XCTestCase {
       epoch: .init(invocationID.epoch.rawValue + 1),
       generation: invocationID.generation
     )
-
     model.testingRejectEngineCommand(id: staleID, message: "Stale")
     XCTAssertTrue(model.history.entries.isEmpty)
     XCTAssertEqual(model.overlayModel.transcript, "keep current")
-
     var emptySession = DictationSession(readiness: .ready)
     _ = emptySession.transition(.pressed)
     let emptyID = try XCTUnwrap(emptySession.listening?.id)
@@ -375,7 +373,10 @@ final class AppModelCoordinationTests: XCTestCase {
     defaults.set(TranscriptionEngineSelection.fluidAudio.rawValue, forKey: TranscriptionPreferences.Key.engine)
     let model = AppModel(defaults: defaults)
     model.localModels.load()
-    XCTAssertEqual(model.localModels.loadState, .failed("The local model is not installed."))
+    let expectedReason = LocalModelsController.hardwareSupported
+      ? "The local model is not installed."
+      : "On-device transcription requires Apple Silicon."
+    XCTAssertEqual(model.localModels.loadState, .failed(expectedReason))
   }
 
   func testAcceptedEngineCommandDoesNotReportRejection() {
