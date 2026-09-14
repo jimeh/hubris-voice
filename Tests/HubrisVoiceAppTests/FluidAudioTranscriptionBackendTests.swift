@@ -383,7 +383,7 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
     try await correctionReleases.waitUntilBlocked()
 
     let unloadTask = Task { await backend.unload() }
-    try await Task.sleep(for: .milliseconds(20))
+    await correctionReleases.waitUntilCancellationObserved()
     await correctionReleases.resume()
     await unloadTask.value
 
@@ -1028,7 +1028,9 @@ private actor ReleaseRecorder {
   private var releases = 0
   private var shouldBlockNext: Bool
   private var isBlocked = false
+  private var cancellationObserved = false
   private var continuation: CheckedContinuation<Void, Never>?
+  private var cancellationWaiters: [CheckedContinuation<Void, Never>] = []
 
   init(blockNext: Bool = false) {
     shouldBlockNext = blockNext
@@ -1039,8 +1041,12 @@ private actor ReleaseRecorder {
     guard shouldBlockNext else { return }
     shouldBlockNext = false
     isBlocked = true
-    await withCheckedContinuation { continuation in
-      self.continuation = continuation
+    await withTaskCancellationHandler {
+      await withCheckedContinuation { continuation in
+        self.continuation = continuation
+      }
+    } onCancel: {
+      Task { await self.recordCancellation() }
     }
     isBlocked = false
   }
@@ -1059,6 +1065,22 @@ private actor ReleaseRecorder {
   func resume() {
     continuation?.resume()
     continuation = nil
+  }
+
+  func waitUntilCancellationObserved() async {
+    guard !cancellationObserved else { return }
+    await withCheckedContinuation { continuation in
+      cancellationWaiters.append(continuation)
+    }
+  }
+
+  private func recordCancellation() {
+    cancellationObserved = true
+    let waiters = cancellationWaiters
+    cancellationWaiters.removeAll()
+    for waiter in waiters {
+      waiter.resume()
+    }
   }
 }
 
