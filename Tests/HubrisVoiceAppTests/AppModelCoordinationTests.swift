@@ -263,6 +263,59 @@ final class AppModelCoordinationTests: XCTestCase {
     XCTAssertEqual(rejectionEvents, [])
   }
 
+  func testRejectedBeginSuppressesStaleStartCaptureEffect() {
+    var session = DictationSession(readiness: .ready)
+    let effects = session.transition(.pressed)
+    let sink = RejectingEngineCommandSink()
+    var captures: [TranscriptionInvocation] = []
+
+    for effect in effects {
+      switch effect {
+      case .beginTranscription(let invocation):
+        XCTAssertFalse(AppModelCoordinationPolicy.submitEngineCommand(
+          .begin(invocation),
+          submit: sink.submit,
+          handleRejection: { _ = session.transition($0) }
+        ))
+      case .startCapture(let invocation):
+        if AppModelCoordinationPolicy.shouldStartCapture(invocation, session: session) {
+          captures.append(invocation)
+        }
+      default:
+        break
+      }
+    }
+
+    XCTAssertNil(session.listening)
+    XCTAssertEqual(captures, [])
+  }
+
+  func testAcceptedBeginAllowsCurrentInvocationCapture() throws {
+    var session = DictationSession(readiness: .ready)
+    let effects = session.transition(.pressed)
+    var captures: [TranscriptionInvocation] = []
+
+    for effect in effects {
+      switch effect {
+      case .beginTranscription(let invocation):
+        XCTAssertTrue(AppModelCoordinationPolicy.submitEngineCommand(
+          .begin(invocation),
+          submit: { _ in true },
+          handleRejection: { _ = session.transition($0) }
+        ))
+      case .startCapture(let invocation):
+        if AppModelCoordinationPolicy.shouldStartCapture(invocation, session: session) {
+          captures.append(invocation)
+        }
+      default:
+        break
+      }
+    }
+
+    let listeningID = try XCTUnwrap(session.listening?.id)
+    XCTAssertEqual(captures.map(\.id), [listeningID])
+  }
+
   func testLocalConnectionSummaryUsesLocalReadinessAndTerms() throws {
     let suite = "HubrisVoice.AppModelCoordinationTest.\(UUID().uuidString)"
     let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

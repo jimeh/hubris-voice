@@ -885,6 +885,9 @@ final class AppModel: ObservableObject {
   private func interpret(_ effect: DictationSession.Effect) {
     switch effect {
     case .startCapture(let invocation):
+      guard AppModelCoordinationPolicy.shouldStartCapture(invocation, session: session) else {
+        return
+      }
       if startStopSoundsEnabled {
         soundCues.playStart()
       }

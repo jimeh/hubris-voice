@@ -24,6 +24,13 @@ enum AppModelCoordinationPolicy {
     !changingEngine && !pendingConfiguration
   }
 
+  static func shouldStartCapture(
+    _ invocation: TranscriptionInvocation,
+    session: DictationSession
+  ) -> Bool {
+    session.listening?.id == invocation.id
+  }
+
   @discardableResult
   static func submitEngineCommand(
     _ command: TranscriptionEngineCommand,
