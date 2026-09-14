@@ -756,9 +756,9 @@ private actor OpenAITranscriptionState {
 
   @discardableResult
   private func suppressUnknownItemInference(for invocation: Invocation) -> Bool {
-    guard invocation.itemID == nil, invocation.hasAudio else { return false }
+    guard isReady, invocation.itemID == nil, invocation.hasAudio else { return false }
     isUnknownItemInferenceSuppressed = true
-    return isReady
+    return true
   }
 
   private func completeEmptyInvocation(_ id: TranscriptionInvocationID) {

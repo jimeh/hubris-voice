@@ -201,6 +201,26 @@ final class OpenAITranscriptionBackendTests: XCTestCase {
     XCTAssertEqual(preview, .preview(id: replacement.id, text: "Fresh"))
   }
 
+  func testCancellingRetainedAudioWhileRecoveringKeepsFreshAttemptInferenceEnabled() async throws {
+    let fixture = await Fixture.make()
+    await fixture.backend.testingResetForReconnect()
+    let cancelled = fixture.invocation(0)
+    await fixture.backend.testingHandle(.begin(cancelled))
+    await fixture.backend.testingHandle(.append(id: cancelled.id, sequence: 0, audio: Data([1])))
+    await fixture.backend.testingHandle(.cancel(id: cancelled.id))
+
+    let replacement = fixture.invocation(1)
+    await fixture.backend.testingHandle(.begin(replacement))
+    await fixture.backend.testingHandle(.append(id: replacement.id, sequence: 0, audio: Data([2])))
+    await fixture.backend.testingSetReady(epoch: fixture.epoch, attemptID: "replacement-attempt")
+    let ready = try await fixture.next()
+    XCTAssertEqual(ready, .readiness(epoch: fixture.epoch, state: .ready))
+
+    await fixture.backend.testingReceive(.transcriptDelta(itemID: "replacement-item", delta: "Fresh"))
+    let preview = try await fixture.next()
+    XCTAssertEqual(preview, .preview(id: replacement.id, text: "Fresh"))
+  }
+
   func testLateCancelledDeltaCannotBindReplacementAfterOlderAcknowledgement() async throws {
     let fixture = await Fixture.make()
     let old = fixture.invocation(0)
