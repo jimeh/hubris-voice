@@ -27,6 +27,8 @@ actor FluidAudioTranscriptionState {
   private var isPrepared = false
   private var isReconfiguring = false
   private var preparationGeneration = 0
+  private var nextReconfigurationID = 0
+  private var activeReconfigurationID: Int?
   private var preparationTask: Task<Void, Never>?
   private var reconfigurationTask: Task<FluidAudioReconfigurationOutcome, Never>?
   private var operationTask: Task<Void, Never>?
@@ -75,6 +77,7 @@ actor FluidAudioTranscriptionState {
     pendingOperation?.cancel()
     preparationTask = nil
     reconfigurationTask = nil
+    activeReconfigurationID = nil
     operationTask = nil
     invocations.removeAll()
     order.removeAll()
@@ -101,10 +104,13 @@ actor FluidAudioTranscriptionState {
     self.epoch = epoch
     events.yield(.readiness(epoch: epoch, state: .preparing(message: "Loading local model…")))
     preparationTask?.cancel()
+    let pendingReconfiguration = reconfigurationTask
+    pendingReconfiguration?.cancel()
     let context = context
     let correctionPolicy = correctionPolicy
     preparationTask = Task { [weak self, acquireModels, acquireCorrection, context, correctionPolicy, processor] in
       do {
+        _ = await pendingReconfiguration?.value
         let lease = try await acquireModels(context, correctionPolicy)
         let needsCorrection = correctionPolicy == .strict && !context.resolvedEntries.isEmpty
         let correctionLease = needsCorrection ? try? await acquireCorrection() : nil
@@ -403,6 +409,9 @@ extension FluidAudioTranscriptionState {
     guard let lease, isPrepared else { return true }
 
     let generation = preparationGeneration
+    nextReconfigurationID &+= 1
+    let reconfigurationID = nextReconfigurationID
+    activeReconfigurationID = reconfigurationID
     isReconfiguring = true
     isPrepared = false
     let needsCorrection = correctionPolicy == .strict && !context.resolvedEntries.isEmpty
@@ -426,14 +435,16 @@ extension FluidAudioTranscriptionState {
       return await completeReconfiguration(
         acquiredCorrectionLease: acquiredCorrectionLease,
         needsCorrection: needsCorrection,
-        generation: generation
+        generation: generation,
+        reconfigurationID: reconfigurationID
       )
     case .failed(let acquiredCorrectionLease):
       return try await failReconfiguration(
         acquiredCorrectionLease: acquiredCorrectionLease,
         previousContext: previousContext,
         previousCorrectionPolicy: previousCorrectionPolicy,
-        generation: generation
+        generation: generation,
+        reconfigurationID: reconfigurationID
       )
     }
   }
@@ -441,24 +452,28 @@ extension FluidAudioTranscriptionState {
   private func completeReconfiguration(
     acquiredCorrectionLease: FluidAudioCorrectionLease?,
     needsCorrection: Bool,
-    generation: Int
+    generation: Int,
+    reconfigurationID: Int
   ) async -> Bool {
     guard preparationGeneration == generation else {
       await acquiredCorrectionLease?.release()
+      retireReconfiguration(reconfigurationID)
       return false
-    }
-    if let acquiredCorrectionLease {
-      correctionLease = acquiredCorrectionLease
     }
     let correctionLeaseToRelease = !needsCorrection ? correctionLease : nil
     if correctionLeaseToRelease != nil {
       correctionLease = nil
     }
-    isPrepared = true
-    isReconfiguring = false
     await correctionLeaseToRelease?.release()
-    guard preparationGeneration == generation else { return false }
-    reconfigurationTask = nil
+    guard preparationGeneration == generation else {
+      retireReconfiguration(reconfigurationID)
+      return false
+    }
+    if let acquiredCorrectionLease {
+      correctionLease = acquiredCorrectionLease
+    }
+    isPrepared = true
+    retireReconfiguration(reconfigurationID)
     pump()
     return true
   }
@@ -467,23 +482,34 @@ extension FluidAudioTranscriptionState {
     acquiredCorrectionLease: FluidAudioCorrectionLease?,
     previousContext: LocalInvocationContext,
     previousCorrectionPolicy: LocalCorrectionPolicy,
-    generation: Int
+    generation: Int,
+    reconfigurationID: Int
   ) async throws -> Bool {
     guard preparationGeneration == generation else {
       await acquiredCorrectionLease?.release()
+      retireReconfiguration(reconfigurationID)
+      return false
+    }
+    await acquiredCorrectionLease?.release()
+    guard preparationGeneration == generation else {
+      retireReconfiguration(reconfigurationID)
       return false
     }
     context = previousContext
     correctionPolicy = previousCorrectionPolicy
     isPrepared = true
-    isReconfiguring = false
-    await acquiredCorrectionLease?.release()
-    guard preparationGeneration == generation else { return false }
-    reconfigurationTask = nil
+    retireReconfiguration(reconfigurationID)
     throw TranscriptionFailure(
       kind: .configuration,
       message: "The local correction configuration could not be applied.",
       isRecoverable: false
     )
+  }
+
+  private func retireReconfiguration(_ reconfigurationID: Int) {
+    guard activeReconfigurationID == reconfigurationID else { return }
+    activeReconfigurationID = nil
+    reconfigurationTask = nil
+    isReconfiguring = false
   }
 }

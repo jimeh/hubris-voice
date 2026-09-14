@@ -459,6 +459,71 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
     XCTAssertEqual(correctionReleaseCount, 1)
   }
 
+  func testPreparationSupersedesConfigurationUpdateWithoutLeavingItBusy() async throws {
+    let processor = FakeFluidAudioProcessor(
+      final: FluidAudioProcessResult(rawText: "unused", candidateText: nil)
+    )
+    let correctionReleases = ReleaseRecorder()
+    let backend = FluidAudioTranscriptionBackend(
+      context: .init(permanentEntries: []),
+      correctionPolicy: .disabled,
+      processor: processor,
+      acquireModels: { _, _ in
+        FluidAudioModelLease(
+          primaryDirectory: URL(fileURLWithPath: "/owned/primary"),
+          release: {}
+        )
+      },
+      acquireCorrection: {
+        FluidAudioCorrectionLease(
+          directory: URL(fileURLWithPath: "/owned/ctc"),
+          release: { await correctionReleases.record() }
+        )
+      }
+    )
+    let recorder = EventRecorder(stream: backend.events)
+
+    XCTAssertTrue(backend.submit(.prepare(epoch: TranscriptionBackendEpoch(9))))
+    _ = try await recorder.waitUntil {
+      if case .readiness(TranscriptionBackendEpoch(9), .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+    await processor.blockNextPrepare()
+    let updateTask = Task {
+      try await backend.updateConfiguration(
+        context: LocalInvocationContext(permanentEntries: [
+          LocalVocabularyEntry(canonicalText: "PostgreSQL"),
+        ]),
+        correctionPolicy: .strict
+      )
+    }
+    try await processor.waitForPrepareCount(2)
+
+    XCTAssertTrue(backend.submit(.prepare(epoch: TranscriptionBackendEpoch(10))))
+    try await processor.waitForPrepareCancellation()
+    await processor.releasePrepare()
+    _ = try await recorder.waitUntil {
+      if case .readiness(TranscriptionBackendEpoch(10), .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+
+    let supersededUpdate = try await updateTask.value
+    let subsequentUpdate = try await backend.updateConfiguration(
+      context: .init(permanentEntries: []),
+      correctionPolicy: .disabled
+    )
+    let correctionReleaseCount = await correctionReleases.count()
+    XCTAssertFalse(supersededUpdate)
+    XCTAssertTrue(subsequentUpdate)
+    XCTAssertEqual(correctionReleaseCount, 2)
+  }
+
   func testIdleConfigurationUpdateKeepsPrimaryLoadedAndAppliesToNextInvocation() async throws {
     let processor = FakeFluidAudioProcessor(
       final: FluidAudioProcessResult(
@@ -981,6 +1046,7 @@ private actor FakeFluidAudioProcessor: FluidAudioProcessing {
       primaryLoads += 1
     }
     if shouldBlockPrepare {
+      shouldBlockPrepare = false
       try await withTaskCancellationHandler {
         try await withCheckedThrowingContinuation { continuation in
           prepareContinuation = continuation
