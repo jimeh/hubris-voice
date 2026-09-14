@@ -24,6 +24,27 @@ enum AppModelCoordinationPolicy {
     !changingEngine && !pendingConfiguration
   }
 
+  @discardableResult
+  static func submitEngineCommand(
+    _ command: TranscriptionEngineCommand,
+    submit: (TranscriptionEngineCommand) -> Bool,
+    handleRejection: (DictationSession.Event) -> Void
+  ) -> Bool {
+    guard submit(command) else {
+      let message = "The transcription engine is not accepting audio."
+      switch command {
+      case .append(let invocationID, _, _), .finish(let invocationID):
+        handleRejection(.commandRejected(id: invocationID, message: message))
+      case .cancel:
+        break
+      case .prepare, .begin:
+        handleRejection(.localError(message: message))
+      }
+      return false
+    }
+    return true
+  }
+
   @MainActor
   static func applyLocalConfiguration(
     maximumAttempts: Int = maximumLocalConfigurationAttempts,

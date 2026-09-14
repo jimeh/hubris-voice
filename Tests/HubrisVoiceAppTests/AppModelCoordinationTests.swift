@@ -174,6 +174,95 @@ final class AppModelCoordinationTests: XCTestCase {
     ), "Fn inserts it")
   }
 
+  func testRejectedAppendAndCleanupCancelRetireOnlyTargetInvocation() throws {
+    var session = DictationSession(epoch: .init(7), readiness: .ready)
+    let rejectedID = try makePending(in: &session)
+    _ = session.transition(.engine(.preview(id: rejectedID, text: "recover pending")))
+    let preservedPendingID = try makePending(in: &session)
+    _ = session.transition(.pressed)
+    let listeningID = try XCTUnwrap(session.listening?.id)
+    let sink = RejectingEngineCommandSink()
+    let message = "The transcription engine is not accepting audio."
+    var effects: [DictationSession.Effect] = []
+
+    XCTAssertFalse(AppModelCoordinationPolicy.submitEngineCommand(
+      .append(id: rejectedID, sequence: 3, audio: Data([1, 2, 3])),
+      submit: sink.submit
+    ) { effects += session.transition($0) })
+    XCTAssertEqual(effects, [
+      .cancelFinalizingTimeout(generation: rejectedID.generation),
+      .cancelTranscription(id: rejectedID),
+      .discardSnippet(generation: rejectedID.generation),
+      .scheduleDismiss(after: .seconds(4)),
+    ])
+    XCTAssertEqual(session.listening?.id, listeningID)
+    XCTAssertEqual(session.pending.map(\.id), [preservedPendingID])
+    XCTAssertEqual(session.presented, .error(message: message, text: "recover pending"))
+
+    var cleanupEffects: [DictationSession.Effect] = []
+    XCTAssertFalse(AppModelCoordinationPolicy.submitEngineCommand(
+      .cancel(id: rejectedID),
+      submit: sink.submit
+    ) { cleanupEffects += session.transition($0) })
+    XCTAssertEqual(cleanupEffects, [])
+    XCTAssertEqual(session.listening?.id, listeningID)
+    XCTAssertEqual(session.pending.map(\.id), [preservedPendingID])
+    XCTAssertEqual(session.presented, .error(message: message, text: "recover pending"))
+    XCTAssertEqual(sink.commands, [
+      .append(id: rejectedID, sequence: 3, audio: Data([1, 2, 3])),
+      .cancel(id: rejectedID),
+    ])
+  }
+
+  func testRejectedFinishRetiresPendingInvocationAndIgnoresLateFinal() throws {
+    var session = DictationSession(epoch: .init(7), readiness: .ready)
+    let rejectedID = try makePending(in: &session)
+    _ = session.transition(.engine(.preview(id: rejectedID, text: "recover final chunk")))
+    let sink = RejectingEngineCommandSink()
+    var effects: [DictationSession.Effect] = []
+
+    XCTAssertFalse(AppModelCoordinationPolicy.submitEngineCommand(
+      .finish(id: rejectedID),
+      submit: sink.submit
+    ) { effects += session.transition($0) })
+    XCTAssertEqual(effects, [
+      .cancelFinalizingTimeout(generation: rejectedID.generation),
+      .cancelTranscription(id: rejectedID),
+      .discardSnippet(generation: rejectedID.generation),
+      .scheduleDismiss(after: .seconds(4)),
+    ])
+    XCTAssertEqual(session.pending, [])
+    XCTAssertEqual(
+      session.presented,
+      .error(
+        message: "The transcription engine is not accepting audio.",
+        text: "recover final chunk"
+      )
+    )
+    XCTAssertEqual(session.transition(.engine(.final(
+      id: rejectedID,
+      result: .init(text: "late final", correction: .disabled)
+    ))), [])
+    XCTAssertEqual(sink.commands, [.finish(id: rejectedID)])
+  }
+
+  func testAcceptedEngineCommandDoesNotReportRejection() {
+    let command = TranscriptionEngineCommand.prepare(epoch: .init(3))
+    var submittedCommands: [TranscriptionEngineCommand] = []
+    var rejectionEvents: [DictationSession.Event] = []
+
+    XCTAssertTrue(AppModelCoordinationPolicy.submitEngineCommand(
+      command,
+      submit: {
+        submittedCommands.append($0)
+        return true
+      },
+      handleRejection: { rejectionEvents.append($0) }
+    ))
+    XCTAssertEqual(submittedCommands, [command])
+    XCTAssertEqual(rejectionEvents, [])
+  }
+
   func testLocalConnectionSummaryUsesLocalReadinessAndTerms() throws {
     let suite = "HubrisVoice.AppModelCoordinationTest.\(UUID().uuidString)"
     let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -187,5 +276,23 @@ final class AppModelCoordinationTests: XCTestCase {
     ]
 
     XCTAssertEqual(model.connectionSummary, "On-device · Loaded · 2 local dictionary terms")
+  }
+
+  private func makePending(
+    in session: inout DictationSession
+  ) throws -> TranscriptionInvocationID {
+    _ = session.transition(.pressed)
+    let invocationID = try XCTUnwrap(session.listening?.id)
+    _ = session.transition(.released(heldDuration: 1))
+    return invocationID
+  }
+}
+
+private final class RejectingEngineCommandSink {
+  private(set) var commands: [TranscriptionEngineCommand] = []
+
+  func submit(_ command: TranscriptionEngineCommand) -> Bool {
+    commands.append(command)
+    return false
   }
 }

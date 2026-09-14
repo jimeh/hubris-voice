@@ -1235,15 +1235,11 @@ final class AppModel: ObservableObject {
   }
 
   private func submitEngineCommand(_ command: TranscriptionEngineCommand) {
-    guard engine.submit(command) else {
-      let message = "The transcription engine is not accepting audio."
-      if case .append(let invocationID, _, _) = command {
-        apply(.commandRejected(id: invocationID, message: message))
-      } else {
-        apply(.localError(message: message))
-      }
-      return
-    }
+    AppModelCoordinationPolicy.submitEngineCommand(
+      command,
+      submit: { [engine] in engine.submit($0) },
+      handleRejection: apply
+    )
   }
 
   private func observeReconnectSignals() {
