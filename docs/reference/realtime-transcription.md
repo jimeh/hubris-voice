@@ -109,7 +109,9 @@ the live API, [assumed] not yet confirmed either way.
   replayed audio from scratch under a new `item_id`. Partial text from the
   old socket must be discarded, not appended to.
 - [observed] `error` server events can arrive without the socket closing.
-  The client keeps the connection; the session presents the message.
+  The client normally keeps the connection and presents the message. If an
+  error cannot be correlated while a commit is pending, the adapter replaces
+  the connection before replaying the next queued recording.
 
 ## Things not yet verified
 
