@@ -487,12 +487,16 @@ private actor OpenAITranscriptionState {
       .sorted { $0.value.id.generation < $1.value.id.generation }
     for invocation in live {
       activeInputID = invocation.value.id
-      guard client.outbound.replay(invocation.chunks) else {
+      guard let receipt = client.outbound.replay(
+        invocation.chunks,
+        commit: invocation.isFinished
+      ) else {
         await failFullOutboundMailbox(id: invocation.value.id)
         return
       }
-      if invocation.isFinished {
-        await commit(invocation.value.id)
+      if let eventID = receipt.commitEventID {
+        activeInputID = nil
+        awaitingCommits.append(.init(eventID: eventID, id: invocation.value.id))
       }
     }
   }

@@ -75,6 +75,40 @@ final class OpenAITranscriptionBackendTests: XCTestCase {
     XCTAssertEqual(replayed, .preview(id: invocation.id, text: "new preview"))
   }
 
+  func testReconnectReplaysMoreThanMailboxCapacityAndCommitsInOrder() async throws {
+    let fixture = await Fixture.make(outboundCapacity: 512, consumesOutboundActions: false)
+    await fixture.backend.testingResetForReconnect()
+
+    let invocation = fixture.invocation(0)
+    await fixture.backend.testingHandle(.begin(invocation))
+    for sequence in 0 ..< 600 {
+      await fixture.backend.testingHandle(.append(
+        id: invocation.id,
+        sequence: sequence,
+        audio: Data("chunk-\(sequence)".utf8)
+      ))
+    }
+    await fixture.backend.testingHandle(.finish(id: invocation.id))
+
+    await fixture.backend.testingSetReady(epoch: fixture.epoch)
+    _ = try await fixture.next()
+
+    let maybeCommitEventID = await fixture.backend.testingCommitEventID(for: invocation.id)
+    let hasInvocation = await fixture.backend.testingHasInvocation(invocation.id)
+    _ = try XCTUnwrap(maybeCommitEventID)
+    XCTAssertTrue(hasInvocation)
+
+    await fixture.backend.testingReceive(.inputCommitted(itemID: "replayed-item"))
+    await fixture.backend.testingReceive(
+      .transcriptCompleted(itemID: "replayed-item", transcript: "Complete replay")
+    )
+    let event = try await fixture.next()
+    XCTAssertEqual(
+      event,
+      .final(id: invocation.id, result: .init(text: "Complete replay", correction: .disabled))
+    )
+  }
+
   func testCompletionsRouteOutOfOrderByProviderItemIdentity() async throws {
     let fixture = await Fixture.make()
     let first = fixture.invocation(0)

@@ -1,7 +1,31 @@
 @testable import HubrisVoiceApp
+import HubrisVoiceCore
 import XCTest
 
 final class RealtimeAttemptTests: XCTestCase {
+  func testReplayUsesOneBoundedActionWithOrderedAudioAndFinalCommit() async throws {
+    let pair = AsyncStream.makeStream(
+      of: RealtimeOutboundAction.self,
+      bufferingPolicy: .bufferingOldest(1)
+    )
+    let pipe = RealtimeOutboundPipe(continuation: pair.continuation)
+    pipe.setAttempt("replay")
+    let chunks = (0 ..< 600).map { Data("chunk-\($0)".utf8) }
+
+    let receipt = try XCTUnwrap(pipe.replay(chunks, commit: true))
+    var iterator = pair.stream.makeAsyncIterator()
+    let maybeAction = await iterator.next()
+    let action = try XCTUnwrap(maybeAction)
+    let commitEventID = try XCTUnwrap(receipt.commitEventID)
+
+    XCTAssertEqual(action.attemptID, "replay")
+    XCTAssertEqual(
+      action.clientEvents,
+      chunks.map(RealtimeClientEvent.appendAudio)
+        + [.commitAudio(eventID: commitEventID)]
+    )
+  }
+
   func testRetiredReceiverAndFailureCannotAffectReplacement() async {
     let client = RealtimeTranscriptionClient()
     await client.beginAttempt("old")

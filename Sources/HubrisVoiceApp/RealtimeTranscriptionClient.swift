@@ -1,15 +1,34 @@
 import Foundation
 import HubrisVoiceCore
 
-private struct RealtimeOutboundAction: Sendable {
+struct RealtimeOutboundAction: Sendable {
   enum Payload: Sendable {
     case append(Data)
     case commit(String)
     case clear
+    case replay(chunks: [Data], commitEventID: String?)
   }
 
   let attemptID: String?
   let payload: Payload
+
+  var clientEvents: [RealtimeClientEvent] {
+    switch payload {
+    case .append(let data):
+      [.appendAudio(data)]
+    case .commit(let eventID):
+      [.commitAudio(eventID: eventID)]
+    case .clear:
+      [.clearAudio]
+    case .replay(let chunks, let commitEventID):
+      chunks.map(RealtimeClientEvent.appendAudio)
+        + (commitEventID.map { [.commitAudio(eventID: $0)] } ?? [])
+    }
+  }
+}
+
+struct RealtimeReplayReceipt: Sendable {
+  let commitEventID: String?
 }
 
 struct RealtimeTransportEvent: Equatable, Sendable {
@@ -152,7 +171,7 @@ private final class RealtimeWebSocketDelegate:
 final class RealtimeOutboundPipe: @unchecked Sendable {
   private let continuation: AsyncStream<RealtimeOutboundAction>.Continuation
 
-  fileprivate init(
+  init(
     continuation: AsyncStream<RealtimeOutboundAction>.Continuation
   ) {
     self.continuation = continuation
@@ -193,11 +212,12 @@ final class RealtimeOutboundPipe: @unchecked Sendable {
     enqueue(.clear)
   }
 
-  func replay(_ chunks: [Data]) -> Bool {
-    for chunk in chunks {
-      guard enqueue(.append(chunk)) else { return false }
+  func replay(_ chunks: [Data], commit: Bool) -> RealtimeReplayReceipt? {
+    let commitEventID = commit ? UUID().uuidString : nil
+    guard enqueue(.replay(chunks: chunks, commitEventID: commitEventID)) else {
+      return nil
     }
-    return true
+    return RealtimeReplayReceipt(commitEventID: commitEventID)
   }
 }
 
@@ -478,13 +498,11 @@ actor RealtimeTranscriptionClient {
       throw ClientError.notConnected
     }
 
-    switch action.payload {
-    case .append(let data):
-      try await send(.appendAudio(data), through: socket)
-    case .commit(let eventID):
-      try await send(.commitAudio(eventID: eventID), through: socket)
-    case .clear:
-      try await send(.clearAudio, through: socket)
+    for event in action.clientEvents {
+      guard action.attemptID == activeAttemptID else {
+        throw CancellationError()
+      }
+      try await send(event, through: socket)
     }
   }
 

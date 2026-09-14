@@ -182,7 +182,10 @@ final class AppModel: ObservableObject {
   }
 
   var connectionSummary: String {
-    switch session.readiness {
+    if activeEngine == .fluidAudio {
+      return "On-device · \(localModels.loadState.title) · \(localDictionaryTermSummary)"
+    }
+    return switch session.readiness {
     case .unavailable:
       "Add an API key"
     case .preparing, .recovering:
@@ -394,6 +397,12 @@ final class AppModel: ObservableObject {
     localModels.onConfigurationChanged = { [weak self] in self?.requestEngineConfiguration() }
     localModels.onLoad = { [weak self] in self?.loadLocalModel() }
     localModels.onUnload = { [weak self] in await self?.unloadLocalModel() }
+    localModels.onPrepareSupplementalRemoval = { [weak self] in
+      await self?.prepareSupplementalModelRemoval() ?? false
+    }
+    localModels.onSupplementalRemovalFinished = { [weak self] restoreReadiness in
+      self?.finishSupplementalModelRemoval(restoreReadiness: restoreReadiness)
+    }
   }
 
   func start() {
@@ -924,12 +933,18 @@ final class AppModel: ObservableObject {
     phaseTitle = session.phaseTitle
     shortcutMonitor.capturesEscape = session.presentation != nil
     if let presentation = session.presentation {
-      // The hint only makes sense when there is a transcript to recover.
-      let overlayPresentation = if presentation.mode == .attention, !presentation.transcript.isEmpty {
+      // Only promise recovery when the presented text is exactly what paste-last will use.
+      let hint = AppModelCoordinationPolicy.recoveryHint(
+        presentedHistoryEntryID: presentedHistoryEntryID,
+        latestEntry: history.latest,
+        presentedText: presentation.transcript,
+        shortcutDisplayName: shortcuts.pasteLastTranscript?.displayName
+      )
+      let overlayPresentation = if presentation.mode == .attention, let hint {
         OverlayPresentation(
           mode: presentation.mode,
           transcript: presentation.transcript,
-          message: "\(presentation.message) · \(recoveryHint)",
+          message: "\(presentation.message) · \(hint)",
           pendingCount: presentation.pendingCount,
           isLocked: presentation.isLocked
         )
@@ -952,7 +967,10 @@ final class AppModel: ObservableObject {
       apply(.pressed)
       return
     }
-    guard !changingEngine, !localModels.pendingConfiguration else {
+    guard AppModelCoordinationPolicy.acceptsNewInsertion(
+      changingEngine: changingEngine,
+      pendingConfiguration: localModels.pendingConfiguration
+    ) else {
       apply(.localError(message: "Waiting for the engine change to finish."))
       return
     }
@@ -1014,6 +1032,13 @@ final class AppModel: ObservableObject {
   }
 
   private func pasteLastTranscriptAtCurrentFocus() {
+    guard AppModelCoordinationPolicy.acceptsNewInsertion(
+      changingEngine: changingEngine,
+      pendingConfiguration: localModels.pendingConfiguration
+    ) else {
+      apply(.localError(message: "Waiting for the engine change to finish."))
+      return
+    }
     guard let lastTranscript else {
       flashAttention()
       return
@@ -1175,16 +1200,14 @@ final class AppModel: ObservableObject {
     )
   }
 
-  private var recoveryHint: String {
-    if let binding = shortcuts.pasteLastTranscript {
-      return "\(binding.displayName) inserts it"
-    }
-    return "Copy it from the menu bar"
-  }
-
   private var dictionaryTermSummary: String {
     let count = dictionaryWords.count
     return "\(count) dictionary term\(count == 1 ? "" : "s")"
+  }
+
+  private var localDictionaryTermSummary: String {
+    let count = localModels.entries.count
+    return "\(count) local dictionary term\(count == 1 ? "" : "s")"
   }
 
   private var languageSummary: String {
@@ -1410,6 +1433,31 @@ private extension AppModel {
     await replaceSelectedEngine(prewarm: false)
   }
 
+  private func prepareSupplementalModelRemoval() async -> Bool {
+    guard
+      activeEngine == .fluidAudio,
+      localModels.loadState == .loaded,
+      isQuiescent,
+      !changingEngine
+    else {
+      return false
+    }
+    let restoreReadiness = !localModelManuallyUnloaded
+    await replaceSelectedEngine(prewarm: false)
+    return restoreReadiness && localModels.loadState == .unloaded && !changingEngine
+  }
+
+  private func finishSupplementalModelRemoval(restoreReadiness: Bool) {
+    guard
+      activeEngine == .fluidAudio,
+      localModels.engine == .fluidAudio,
+      restoreReadiness
+    else {
+      return
+    }
+    prepareSelectedEngine()
+  }
+
   // swiftlint:disable:next function_body_length
   func replaceSelectedEngine(prewarm: Bool = true) async {
     guard isQuiescent, !changingEngine else { return }
@@ -1458,28 +1506,63 @@ private extension AppModel {
     backend = nil
     await localBackend?.unload()
     localBackend = nil
-    activeEngine = selection
-    activeLocalEntries = context.permanentEntries
-    DevelopmentTrace.shared.localTranscriptionSelected = selection == .fluidAudio
+    guard isQuiescent else {
+      localModels.pendingConfiguration = true
+      changingEngine = false
+      localModels.isDictating = true
+      return
+    }
     let runtime: any TranscriptionEngineRuntime
+    let replacementBackend: OpenAITranscriptionBackend?
+    let replacementLocalBackend: FluidAudioTranscriptionBackend?
+    let replacementAPIKey: String?
     if selection == .openAI {
-      savedAPIKey = (try? keychain.readAPIKey()) ?? ""
-      apiKeyDraft = savedAPIKey
-      let cloud = OpenAITranscriptionBackend(apiKey: savedAPIKey, configuration: settings.sessionConfiguration)
-      backend = cloud
+      let apiKey = (try? keychain.readAPIKey()) ?? ""
+      let cloud = OpenAITranscriptionBackend(apiKey: apiKey, configuration: settings.sessionConfiguration)
       runtime = cloud
+      replacementBackend = cloud
+      replacementLocalBackend = nil
+      replacementAPIKey = apiKey
     } else {
       let local = FluidAudioTranscriptionBackend(store: localModels.store, context: context, correctionPolicy: policy)
-      localBackend = local
       runtime = local
+      replacementBackend = nil
+      replacementLocalBackend = local
+      replacementAPIKey = nil
     }
     let epoch = TranscriptionBackendEpoch(engine.epoch.rawValue + 1)
-    engine.replace(runtime: runtime, epoch: epoch)
-    _ = session.setFormat(selection.format)
-    apply(.engineReplaced(epoch: epoch, readiness: .unavailable(
+    let readiness = TranscriptionEngineReadiness.unavailable(
       reason: selection == .fluidAudio ? "Local model unloaded." : "Preparing OpenAI…",
       action: nil
-    )))
+    )
+    let replacementApplied = AppModelCoordinationPolicy.applyEngineReplacement(
+      session: &session,
+      replacement: .init(
+        coordinatorEpoch: engine.epoch,
+        newEpoch: epoch,
+        previousFormat: activeEngine.format,
+        newFormat: selection.format,
+        readiness: readiness
+      )
+    ) {
+      engine.replace(runtime: runtime, epoch: epoch)
+    }
+    guard replacementApplied else {
+      changingEngine = false
+      localModels.isDictating = !isQuiescent
+      localModels.pendingConfiguration = true
+      localModels.message = "The transcription engine change could not be applied."
+      publishSessionState()
+      return
+    }
+    activeEngine = selection
+    activeLocalEntries = context.permanentEntries
+    backend = replacementBackend
+    localBackend = replacementLocalBackend
+    savedAPIKey = replacementAPIKey ?? savedAPIKey
+    apiKeyDraft = replacementAPIKey ?? apiKeyDraft
+    DevelopmentTrace.shared.localTranscriptionSelected = selection == .fluidAudio
+    publishSessionState()
     localModels.loadState = .unloaded
     changingEngine = false
     localModels.isDictating = false

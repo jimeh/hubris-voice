@@ -88,7 +88,10 @@ struct DictationSettingsTab: View {
           ) {
             Toggle("Local dictionary correction", isOn: $localModels.correctionEnabled)
               .labelsHidden()
-              .disabled(!localModels.installedIDs.contains(LocalModelCatalog.correctionID))
+              .disabled(
+                !localModels.correctionEnabled
+                  && !localModels.installedIDs.contains(LocalModelCatalog.correctionID)
+              )
           }
           if !localModels.installedIDs.contains(LocalModelCatalog.correctionID) {
             Text("Download Dictionary correction in Models to enable it.")

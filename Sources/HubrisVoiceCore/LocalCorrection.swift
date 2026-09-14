@@ -230,7 +230,16 @@ public enum LocalTranscriptCorrection {
 
     let first = rawTokens[difference.rawRange.lowerBound]
     let last = rawTokens[difference.rawRange.index(before: difference.rawRange.upperBound)]
-    let trailingPunctuation = last.text.reversed().prefix(while: isBoundaryCharacter)
+    var leadingPunctuation = String(first.text.prefix(while: isBoundaryCharacter))
+    var trailingPunctuation = String(last.text.reversed().prefix(while: isBoundaryCharacter).reversed())
+    let canonicalLeading = String(canonical.prefix(while: isBoundaryCharacter))
+    let canonicalTrailing = String(canonical.reversed().prefix(while: isBoundaryCharacter).reversed())
+    if leadingPunctuation.hasSuffix(canonicalLeading) {
+      leadingPunctuation.removeLast(canonicalLeading.count)
+    }
+    if trailingPunctuation.hasPrefix(canonicalTrailing) {
+      trailingPunctuation.removeFirst(canonicalTrailing.count)
+    }
     return Assessment(
       decision: LocalCorrectionDecision(
         rawText: raw,
@@ -240,7 +249,7 @@ public enum LocalTranscriptCorrection {
       ),
       edit: (
         first.range.lowerBound ..< last.range.upperBound,
-        canonical + String(trailingPunctuation.reversed())
+        leadingPunctuation + canonical + trailingPunctuation
       )
     )
   }

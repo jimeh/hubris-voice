@@ -92,6 +92,39 @@ final class LocalCorrectionTests: XCTestCase {
     XCTAssertTrue(result.decisions.contains { $0.reason == .insertionOrDeletion })
   }
 
+  func testGuardPreservesOpeningAndClosingPunctuation() {
+    let context = LocalInvocationContext(permanentEntries: [
+      LocalVocabularyEntry(canonicalText: "TensorRT"),
+    ])
+    for (raw, expected) in [
+      ("Use (Tensor RT).", "Use (TensorRT)."),
+      ("Use [Tensor RT], please.", "Use [TensorRT], please."),
+      ("Use \"Tensor RT\".", "Use \"TensorRT\"."),
+      ("Use “Tensor RT”.", "Use “TensorRT”."),
+    ] {
+      let result = LocalTranscriptCorrection.guardCandidate(
+        rawText: raw, candidateText: expected, context: context, policy: .strict
+      )
+      XCTAssertEqual(result.text, expected)
+      XCTAssertEqual(result.outcome, .applied)
+    }
+  }
+
+  func testGuardDoesNotDuplicatePunctuationInsideCanonicalTerms() {
+    for (raw, expected, canonical) in [
+      ("Use (.net).", "Use (.NET).", ".NET"),
+      ("Use (c++).", "Use (C++).", "C++"),
+    ] {
+      let result = LocalTranscriptCorrection.guardCandidate(
+        rawText: raw, candidateText: expected,
+        context: LocalInvocationContext(permanentEntries: [LocalVocabularyEntry(canonicalText: canonical)]),
+        policy: .strict
+      )
+      XCTAssertEqual(result.text, expected)
+      XCTAssertEqual(result.outcome, .applied)
+    }
+  }
+
   func testGuardRejectsDeletionInsertionAndNoncanonicalReplacement() {
     let context = LocalInvocationContext(permanentEntries: [
       LocalVocabularyEntry(canonicalText: "Kubernetes"),

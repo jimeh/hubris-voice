@@ -117,15 +117,15 @@ microphone-to-screen latency or cold-start guarantees. Both paths produced text;
 the strict candidate contained complete expected dictionary terms. Sentinel
 checks found no private test term in application diagnostics.
 
-The final `mise run verify` passed: 138 Core tests and 56 app tests were
-collected, with 191 passing and the three opt-in smokes skipped in the default
-suite. The download, network-denied runtime, and native rendering smokes also
-passed separately. The signed release bundle passed strict deep verification.
+`mise run verify` passes the Core, app, and release-tool tests and signed-bundle
+verification. The three opt-in smokes are skipped by the default suite; download,
+network-denied runtime, and native rendering have also passed separately.
 
-This development machine has Xcode 27. Older Xcode 16.0/26.3 CI configurations
-remain in the workflow, but have not been executed locally. There has been no
-live OpenAI smoke during this implementation. Jim has reported successful local
-dictation, live previews, model downloads, and correction in manual use.
+The implementation passed CI with Xcode 16.0 and 26.3 at `9c03199`, alongside
+local Xcode 27 verification and universal bundle signing. Subsequent PR commits
+run the same CI matrix. There has been no live OpenAI smoke during this
+implementation. Jim has reported successful local dictation, live previews,
+model downloads, and correction in manual use.
 
 Jim must verify microphone permissions, physical input/device changes,
 sleep/wake, global shortcut timing, and final-text insertion in real applications.

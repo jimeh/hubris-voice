@@ -4,8 +4,9 @@ Status: implementation and automated verification are complete; manual
 daily-driver validation remains. The engine migration,
 local runtime and dictionary, model service, and settings UI are implemented.
 Model ownership, a real verified install, native network-denied transcription,
-and Xcode 27 release packaging have passed. Older CI toolchains and Jim's
-microphone/device/insertion checks remain outstanding. Jim requested
+and Xcode 27 release packaging have passed. Xcode 16.0/26.3 CI also passed at
+`9c03199`. Jim has verified ordinary local dictation, downloads, and correction;
+the remaining device/sleep-wake and accessibility checks are still manual. Jim requested
 `gpt-5.6-sol` implementor sub-agents at medium effort; the parent owns integration
 and model-management UI. Final behavior and validation limits are recorded in
 [the local transcription reference](../reference/local-transcription.md).
@@ -354,7 +355,7 @@ implementation delegation does not authorize commits, pushes, or publication.
 
 - Milestone 0 model-asset ownership is resolved by the public-API isolation probe.
   Xcode 27 signed packaging and long-input correction now pass locally. The
-  older CI toolchains remain unverified until CI runs.
+  Xcode 16.0/26.3 CI also passed on the initial PR candidate.
 - Fresh recordings must determine whether this correction policy is suitable for
   default-on use. For this plan the answer is settled as opt-in.
 - Jim confirmed that a selected local model stays loaded while the app runs,

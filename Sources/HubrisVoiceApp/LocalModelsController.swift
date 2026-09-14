@@ -53,6 +53,8 @@ final class LocalModelsController: ObservableObject {
   var onConfigurationChanged: (() -> Void)?
   var onLoad: (() -> Void)?
   var onUnload: (() async -> Void)?
+  var onPrepareSupplementalRemoval: (() async -> Bool)?
+  var onSupplementalRemovalFinished: ((Bool) -> Void)?
   private let settings: any SettingsStore
   private var downloadTask: Task<Void, Never>?
 
@@ -138,7 +140,15 @@ final class LocalModelsController: ObservableObject {
   func remove(_ modelID: String) {
     guard !isDictating, downloadTask == nil else { return }
     Task {
-      await onUnload?()
+      let restoreSupplementalReadiness: Bool
+      if modelID == LocalModelCatalog.primaryID {
+        await onUnload?()
+        restoreSupplementalReadiness = false
+      } else if modelID == LocalModelCatalog.correctionID {
+        restoreSupplementalReadiness = await onPrepareSupplementalRemoval?() ?? false
+      } else {
+        restoreSupplementalReadiness = false
+      }
       do {
         try await store.remove(modelID)
         message = "Model files removed."
@@ -146,8 +156,12 @@ final class LocalModelsController: ObservableObject {
         message = "Model files could not be removed. Unload the model and retry."
       }
       await refresh()
-      if engine == .fluidAudio {
-        onConfigurationChanged?()
+      if modelID == LocalModelCatalog.primaryID {
+        if engine == .fluidAudio {
+          onLoad?()
+        }
+      } else if modelID == LocalModelCatalog.correctionID {
+        onSupplementalRemovalFinished?(restoreSupplementalReadiness)
       }
     }
   }
