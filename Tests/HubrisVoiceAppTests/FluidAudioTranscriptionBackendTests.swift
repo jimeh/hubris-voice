@@ -321,12 +321,14 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
         false
       }
     }
+    let eventCountBeforeSecondPreparation = await recorder.snapshot().count
     XCTAssertTrue(backend.submit(.prepare(epoch: epoch)))
-    for _ in 0 ..< 200 {
-      if await processor.prepareCount() >= 2 {
-        break
+    _ = try await recorder.waitUntil(after: eventCountBeforeSecondPreparation) {
+      if case .readiness(_, .ready) = $0 {
+        true
+      } else {
+        false
       }
-      await Task.yield()
     }
 
     var primaryReleaseCount = await primaryReleases.count()
@@ -991,10 +993,11 @@ private actor EventRecorder {
   }
 
   func waitUntil(
+    after eventIndex: Int = 0,
     _ predicate: @Sendable (TranscriptionEngineEvent) -> Bool
   ) async throws -> TranscriptionEngineEvent {
     for _ in 0 ..< 200 {
-      if let event = events.first(where: predicate) {
+      if let event = events.dropFirst(eventIndex).first(where: predicate) {
         return event
       }
       try await Task.sleep(for: .milliseconds(5))
