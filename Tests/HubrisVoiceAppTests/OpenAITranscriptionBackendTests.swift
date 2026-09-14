@@ -3,6 +3,21 @@ import HubrisVoiceCore
 import XCTest
 
 final class OpenAITranscriptionBackendTests: XCTestCase {
+  func testBackendDeallocatesWithoutExplicitShutdown() async {
+    var backend: OpenAITranscriptionBackend? = OpenAITranscriptionBackend(
+      apiKey: "",
+      configuration: .init(languages: [], prompt: "", keywords: [], delay: .low)
+    )
+    weak var releasedBackend = backend
+
+    backend = nil
+    for _ in 0 ..< 20 where releasedBackend != nil {
+      await Task.yield()
+    }
+
+    XCTAssertNil(releasedBackend)
+  }
+
   func testPrecommitDeltasBecomeWholePreviewSnapshots() async throws {
     let fixture = await Fixture.make()
     await fixture.backend.testingHandle(.begin(fixture.invocation(0)))

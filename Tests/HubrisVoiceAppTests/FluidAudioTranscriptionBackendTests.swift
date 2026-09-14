@@ -6,6 +6,24 @@ import XCTest
 // swiftlint:disable file_length
 // swiftlint:disable:next type_body_length
 final class FluidAudioTranscriptionBackendTests: XCTestCase {
+  func testBackendDeallocatesWithoutExplicitUnload() async {
+    let processor = FakeFluidAudioProcessor(
+      final: FluidAudioProcessResult(rawText: "unused", candidateText: nil)
+    )
+    var backend: FluidAudioTranscriptionBackend? = makeBackend(
+      processor: processor,
+      policy: .disabled
+    )
+    weak var releasedBackend = backend
+
+    backend = nil
+    for _ in 0 ..< 20 where releasedBackend != nil {
+      await Task.yield()
+    }
+
+    XCTAssertNil(releasedBackend)
+  }
+
   func testCorrectionSegmentsKeepSubwordTokensAndPunctuationTogether() {
     let tokens: [FluidAudioCorrectionSegmenter.TimedToken] = [
       .init(index: 0, text: " first", startTime: 0, endTime: 0.4),

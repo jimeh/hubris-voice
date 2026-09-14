@@ -45,8 +45,11 @@ final class LocalModelStoreTests: XCTestCase {
   func testInstallVerifiesFilesAndLeasePreventsRemoval() async throws {
     let fixture = try Fixture()
     defer { fixture.clean() }
-    let store = fixture.store()
+    let downloader = FixtureDownloader(root: fixture.downloadRoot)
+    let store = fixture.store(downloader: downloader)
     try await store.install("test")
+    let expectedByteCounts = await downloader.expectedByteCounts
+    XCTAssertEqual(expectedByteCounts, ["first": [5], "second": [6]])
     let installed = try await store.installed("test")
     XCTAssertTrue(installed)
     let lease = try await store.acquire("test")
@@ -295,6 +298,7 @@ private actor FixtureDownloader: LocalModelDownloading {
   var corruptSecond: Bool
   var suspendAt: String?
   var counts: [String: Int] = [:]
+  var expectedByteCounts: [String: [Int64]] = [:]
   private var requestWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
 
   init(root _: URL, corruptSecond: Bool = false, suspendAt: String? = nil) {
@@ -322,11 +326,12 @@ private actor FixtureDownloader: LocalModelDownloading {
   func download(
     from url: URL,
     to destination: URL,
-    expectedByteCount _: Int64,
+    expectedByteCount: Int64,
     progress: @escaping @Sendable (Int64) -> Void
   ) async throws {
     let name = url.lastPathComponent
     counts[name, default: 0] += 1
+    expectedByteCounts[name, default: []].append(expectedByteCount)
     let waiters = requestWaiters.removeValue(forKey: name) ?? []
     waiters.forEach { $0.resume() }
     if suspendAt == name {

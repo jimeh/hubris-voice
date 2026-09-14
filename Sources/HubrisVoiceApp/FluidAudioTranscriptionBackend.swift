@@ -64,7 +64,7 @@ final class FluidAudioTranscriptionBackend: TranscriptionEngineRuntime, @uncheck
       events: pair.continuation
     )
     let stream = commands.stream
-    commandTask = Task { [state] in
+    commandTask = Task { [state, commands] in
       for await command in stream {
         commands.didConsume(command)
         guard !Task.isCancelled else { return }

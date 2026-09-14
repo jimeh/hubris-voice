@@ -386,24 +386,29 @@ test("manifest rejects ambiguous sources, unsafe paths, and unpinned URLs", asyn
   expect(readSources(file)).toHaveLength(2);
   put(file, JSON.stringify({ schema: 2, sources: [] }));
   expect(readSources(file)).toEqual([]);
-  put(
-    file,
-    JSON.stringify({
-      schema: 2,
-      sources: [
-        { ...f.source, destination: "parent" },
-        {
-          ...f.source,
-          name: "nested",
-          destination: "parent/child",
-          patches: [],
-        },
-      ],
-    }),
-  );
-  expect(() => readSources(file)).toThrow(
-    "invalid or overlapping vendor destination",
-  );
+  for (const [first, second] of [
+    ["Parent", "parent/child"],
+    ["../../Vendor/FluidAudio", "../../Vendor/fluidaudio"],
+  ]) {
+    put(
+      file,
+      JSON.stringify({
+        schema: 2,
+        sources: [
+          { ...f.source, destination: first },
+          {
+            ...f.source,
+            name: "second",
+            destination: second,
+            patches: [],
+          },
+        ],
+      }),
+    );
+    expect(() => readSources(file)).toThrow(
+      "invalid or overlapping vendor destination",
+    );
+  }
   for (const sources of [
     [f.source, f.source],
     [

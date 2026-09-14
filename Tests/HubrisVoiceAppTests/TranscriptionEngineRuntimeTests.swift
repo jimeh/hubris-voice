@@ -5,6 +5,24 @@ import XCTest
 
 @MainActor
 final class TranscriptionEngineRuntimeTests: XCTestCase {
+  func testDequeuedAudioReleasesMailboxPermit() async {
+    let pipe = TranscriptionEngineCommandPipe(capacity: 1)
+    let invocationID = TranscriptionInvocationID(epoch: .init(1), generation: 1)
+    let first = TranscriptionEngineCommand.append(id: invocationID, sequence: 0, audio: Data([0, 0]))
+    let second = TranscriptionEngineCommand.append(id: invocationID, sequence: 1, audio: Data([1, 0]))
+    var commands = pipe.stream.makeAsyncIterator()
+
+    XCTAssertTrue(pipe.submit(first))
+    XCTAssertFalse(pipe.submit(second))
+    let consumed = await commands.next()
+    XCTAssertEqual(consumed, first)
+    if let consumed {
+      pipe.didConsume(consumed)
+    }
+    XCTAssertTrue(pipe.submit(second))
+    pipe.finish()
+  }
+
   func testSaturatedAudioMailboxStillAcceptsOrderedCancellationAndNextInvocation() async {
     let pipe = TranscriptionEngineCommandPipe(capacity: 1)
     let epoch = TranscriptionBackendEpoch(1)

@@ -42,7 +42,7 @@ final class OpenAITranscriptionBackend: TranscriptionEngineRuntime, @unchecked S
       configurationContinuation: configurationPair.continuation
     )
     let commandStream = commands.stream
-    commandTask = Task { [state] in
+    commandTask = Task { [state, commands] in
       await state.start()
       for await command in commandStream {
         commands.didConsume(command)

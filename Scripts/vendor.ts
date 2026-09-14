@@ -104,7 +104,7 @@ export function readSources(file: string): Source[] {
     ) {
       throw new Error("invalid or duplicate vendor source");
     }
-    const destination = resolve(dirname(file), source.destination);
+    const destination = resolve(dirname(file), source.destination).toLowerCase();
     if (
       [...destinations].some(
         (existing) =>
