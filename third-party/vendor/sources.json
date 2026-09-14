@@ -1,0 +1,43 @@
+{
+  "schema": 2,
+  "sources": [
+    {
+      "name": "fluidaudio",
+      "version": "0.15.7",
+      "destination": "../../Vendor/FluidAudio",
+      "url": "https://github.com/FluidInference/FluidAudio/archive/41540ea237350afe5117a082b5c28eda642d0612.tar.gz",
+      "sha256": "c391660277db493efc09ef74d90cfdc59b362afab66b628e9fe3ad955d08a96c",
+      "archiveRoot": "FluidAudio-41540ea237350afe5117a082b5c28eda642d0612",
+      "paths": [
+        "Package.swift",
+        "Package@swift-6.2.swift",
+        "LICENSE",
+        "Sources/FastClusterWrapper",
+        "Sources/FluidAudio",
+        "Sources/MachTaskSelfWrapper",
+        "ThirdPartyLicenses"
+      ],
+      "upstream": {
+        "repository": "https://github.com/FluidInference/FluidAudio",
+        "revision": "41540ea237350afe5117a082b5c28eda642d0612"
+      },
+      "patches": [
+        {
+          "name": "package-configuration",
+          "file": "patches/fluidaudio/package-configuration.patch",
+          "description": "Keep the vendored package build focused on the FluidAudio library by removing CLI and test targets."
+        },
+        {
+          "name": "privacy-logging",
+          "file": "patches/fluidaudio/privacy-logging.patch",
+          "description": "Keep FluidAudio's public logging facade while making every sink a no-op so transcript and vocabulary data cannot escape Hubris Voice's diagnostics boundary."
+        },
+        {
+          "name": "compiler-fixes",
+          "file": "patches/fluidaudio/compiler-fixes.patch",
+          "description": "Apply the reviewed Swift 6.2, Core ML, Accelerate, C++, and warning compatibility fixes needed by Hubris Voice."
+        }
+      ]
+    }
+  ]
+}

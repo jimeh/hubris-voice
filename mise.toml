@@ -7,6 +7,7 @@ minimum_release_age = "7d"
 
 [tools]
 actionlint = "latest"
+bun = "1.4.0"
 lefthook = "latest"
 pinact = "latest"
 "pipx:spdx-tools" = "latest"
@@ -124,6 +125,7 @@ run = [
 [tasks.lint]
 description = "Run all static checks"
 depends = [
+  "check:scripts",
   "lint:swift",
   "lint:shell",
   "lint:config",
@@ -279,8 +281,58 @@ description = "Publish the verified GitHub Release"
 run = "swift run --package-path Tools/ReleaseTool hubris-voice-release publish"
 
 [tasks."lint:vendor"]
-description = "Verify pinned FluidAudio source and its privacy patch"
-run = "./Scripts/verify-vendored-fluidaudio.sh"
+description = "Verify pinned FluidAudio source and its ordered patch stack"
+run = "bun Scripts/vendor.ts check"
+
+[tasks."scripts:install"]
+description = "Install locked TypeScript tooling dependencies"
+run = "bun install --frozen-lockfile"
+
+[tasks."typecheck:scripts"]
+description = "Type-check repository scripts"
+depends = ["scripts:install"]
+run = "bun node_modules/typescript/bin/tsc --noEmit"
+
+[tasks."test:scripts"]
+description = "Test repository tooling with Bun"
+depends = ["scripts:install"]
+run = "bun test Scripts"
+
+[tasks."check:scripts"]
+description = "Type-check and test repository tooling"
+depends = ["typecheck:scripts", "test:scripts"]
+
+[tasks."vendor:check"]
+description = "Verify vendored sources match their pinned archives and patches"
+run = "bun Scripts/vendor.ts check"
+
+[tasks."vendor:index-check"]
+description = "Fail if vendor-related staged and working-tree inputs differ"
+run = "bun Scripts/vendor.ts index-check"
+
+[tasks."vendor:start"]
+description = "Start a targeted vendor edit session: <source> <patch>"
+run = "bun Scripts/vendor.ts start"
+
+[tasks."vendor:finish"]
+description = "Fold tested vendor edits into the selected patch and replay later patches: <source>"
+run = "bun Scripts/vendor.ts finish"
+
+[tasks."vendor:continue"]
+description = "Resume a vendor session after resolving a replay conflict: <source>"
+run = "bun Scripts/vendor.ts continue"
+
+[tasks."vendor:status"]
+description = "Show active vendor edit sessions, optionally for one source"
+run = "bun Scripts/vendor.ts status"
+
+[tasks."vendor:cancel"]
+description = "Cancel a vendor session, retaining source edits and recovery state: <source>"
+run = "bun Scripts/vendor.ts cancel"
+
+[tasks."vendor:reopen"]
+description = "Return a vendor session to editing, preserving source and replay work: <source>"
+run = "bun Scripts/vendor.ts reopen"
 
 [tasks."smoke:local:install"]
 description = "Explicitly download and verify pinned local models in a Hubris-owned smoke directory (711 MB)"

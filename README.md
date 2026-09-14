@@ -58,8 +58,11 @@ The bundle is written to:
 ```
 
 FluidAudio 0.15.7 is vendored with patches for compiler compatibility and to
-disable SDK logging, which otherwise includes vocabulary and transcript text. Its source, licenses,
-and patch provenance live in [Vendor/FluidAudio](Vendor/FluidAudio/UPSTREAM.md).
+disable SDK logging, which otherwise includes vocabulary and transcript text.
+Its source and licenses live in [Vendor/FluidAudio](Vendor/FluidAudio), while
+the checksum-pinned archive provenance, ordered patches, and maintenance
+workflow live in
+[third-party/vendor](third-party/vendor/README.md).
 Builds can fetch its checksum-pinned native binary dependency. Ordinary tests do
 not download speech models or connect to OpenAI.
 Signed distribution builds also embed the pinned Sparkle framework for self-updates.

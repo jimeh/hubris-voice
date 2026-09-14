@@ -12,6 +12,12 @@ a Swift package. Use mise as the only project task runner and tool manager.
   release-facing work.
 - Use `mise run format` to write formatting changes. SwiftFormat owns layout;
   SwiftLint owns semantic and style diagnostics.
+- Vendored FluidAudio uses the ordered, checksum-pinned recipe in
+  `third-party/vendor/sources.json`. Follow `third-party/vendor/README.md`
+  and use the `vendor:status`, `vendor:start`, `vendor:finish`,
+  `vendor:continue`, `vendor:reopen`, and `vendor:cancel` tasks for patch
+  maintenance. Do not refresh unexplained source drift or edit recipe files
+  during an active session.
 - Update managed tools with `mise run tools:update`; the seven-day release
   cooldown and `mise.lock` keep routine upgrades reproducible.
 - Run focused tests with `mise exec -- swift test --filter <TestName>`.

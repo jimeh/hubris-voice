@@ -1,0 +1,108 @@
+diff --git a/Package.swift b/Package.swift
+index b8e2ca0..d248bf7 100644
+--- a/Package.swift
++++ b/Package.swift
+@@ -13,10 +13,6 @@ let package = Package(
+             name: "FluidAudio",
+             targets: ["FluidAudio"]
+         ),
+-        .executable(
+-            name: "fluidaudiocli",
+-            targets: ["FluidAudioCLI"]
+-        ),
+     ],
+     dependencies: [],
+     targets: [
+@@ -32,6 +28,9 @@ let package = Package(
+             resources: [
+                 // Keep .process: .copy of a Resources-named directory breaks Apple code signing on iOS.
+                 .process("TTS/LuxTts/G2p/Resources")
++            ],
++            swiftSettings: [
++                .unsafeFlags(["-Xcc", "-DACCELERATE_NEW_LAPACK"])
+             ]
+         ),
+         // Byte-exact NeMo text normalization (FST engine, all 7 languages).
+@@ -54,28 +53,6 @@ let package = Package(
+             path: "Sources/MachTaskSelfWrapper",
+             publicHeadersPath: "include"
+         ),
+-        .executableTarget(
+-            name: "FluidAudioCLI",
+-            dependencies: ["FluidAudio"],
+-            path: "Sources/FluidAudioCLI",
+-            exclude: ["README.md"],
+-            resources: [
+-                .process("Utils/english.json")
+-            ]
+-        ),
+-        .testTarget(
+-            name: "FluidAudioTests",
+-            dependencies: [
+-                "FluidAudio",
+-                "FluidAudioCLI",
+-            ],
+-            resources: [
+-                .process("TTS/LuxTts/Resources"),
+-                // Real recordings (cleared for public release by the speaker) for the
+-                // streaming final-window regression, issue #855.
+-                .copy("ASR/Parakeet/SlidingWindow/Fixtures"),
+-            ]
+-        ),
+     ],
+     cxxLanguageStandard: .cxx17
+ )
+diff --git a/Package@swift-6.2.swift b/Package@swift-6.2.swift
+index 8d2ed05..46aebc1 100644
+--- a/Package@swift-6.2.swift
++++ b/Package@swift-6.2.swift
+@@ -19,10 +19,6 @@ let package = Package(
+             name: "FluidAudio",
+             targets: ["FluidAudio"]
+         ),
+-        .executable(
+-            name: "fluidaudiocli",
+-            targets: ["FluidAudioCLI"]
+-        ),
+     ],
+     traits: [
+         // Opt out of the NeMo text-normalization engine (~8 MB per slice, a prebuilt
+@@ -51,6 +47,9 @@ let package = Package(
+             resources: [
+                 // Keep .process: .copy of a Resources-named directory breaks Apple code signing on iOS.
+                 .process("TTS/LuxTts/G2p/Resources")
++            ],
++            swiftSettings: [
++                .unsafeFlags(["-Xcc", "-DACCELERATE_NEW_LAPACK"])
+             ]
+         ),
+         // Byte-exact NeMo text normalization (FST engine, all 7 languages).
+@@ -71,28 +70,6 @@ let package = Package(
+             path: "Sources/MachTaskSelfWrapper",
+             publicHeadersPath: "include"
+         ),
+-        .executableTarget(
+-            name: "FluidAudioCLI",
+-            dependencies: ["FluidAudio"],
+-            path: "Sources/FluidAudioCLI",
+-            exclude: ["README.md"],
+-            resources: [
+-                .process("Utils/english.json")
+-            ]
+-        ),
+-        .testTarget(
+-            name: "FluidAudioTests",
+-            dependencies: [
+-                "FluidAudio",
+-                "FluidAudioCLI",
+-            ],
+-            resources: [
+-                .process("TTS/LuxTts/Resources"),
+-                // Real recordings (cleared for public release by the speaker) for the
+-                // streaming final-window regression, issue #855.
+-                .copy("ASR/Parakeet/SlidingWindow/Fixtures"),
+-            ]
+-        ),
+     ],
+     cxxLanguageStandard: .cxx17
+ )

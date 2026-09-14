@@ -10,8 +10,12 @@ pre-commit:
       stage_fixed: true
 
     - name: vendor-integrity
-      glob: "Vendor/**"
-      run: mise run lint:vendor
+      glob: "{Vendor/**,third-party/vendor/**,Scripts/vendor*.ts}"
+      run: mise run vendor:index-check && mise run vendor:check
+
+    - name: tooling
+      glob: "{Scripts/*.ts,package.json,bun.lock,bunfig.toml,tsconfig.json}"
+      run: mise run check:scripts
 
     - name: zsh
       glob: "*.sh"
@@ -19,7 +23,7 @@ pre-commit:
       stage_fixed: true
 
     - name: toml
-      glob: "*.toml"
+      glob: "{*.toml,mise.lock}"
       run: mise exec -- taplo format {staged_files} && mise exec -- taplo lint mise.toml && treeboot check && mise tasks validate
       stage_fixed: true
 

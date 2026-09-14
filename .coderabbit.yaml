@@ -5,6 +5,3 @@ reviews:
     - "**"
     - "!Vendor/FluidAudio/Sources/**"
     - "!Vendor/FluidAudio/ThirdPartyLicenses/**"
-    - "Vendor/FluidAudio/Patches/**"
-    - "Vendor/FluidAudio/UPSTREAM.md"
-    - "Vendor/FluidAudio/UPSTREAM.sha256"
