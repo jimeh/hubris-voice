@@ -102,7 +102,8 @@ final class TranscriptionEngineRuntimeTests: XCTestCase {
       runtime: runtime,
       epoch: .init(1)
     )
-    weak var releasedCoordinator = coordinator
+    weak var releasedCoordinator: TranscriptionEngineCoordinator?
+    releasedCoordinator = coordinator
 
     coordinator = nil
 

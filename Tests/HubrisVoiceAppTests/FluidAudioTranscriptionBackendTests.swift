@@ -14,7 +14,8 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
       processor: processor,
       policy: .disabled
     )
-    weak var releasedBackend = backend
+    weak var releasedBackend: FluidAudioTranscriptionBackend?
+    releasedBackend = backend
 
     backend = nil
     for _ in 0 ..< 20 where releasedBackend != nil {
@@ -179,6 +180,18 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
     XCTAssertTrue(backend.submit(.finish(id: invocation.id)))
     try await processor.waitForPrepare()
     XCTAssertTrue(backend.submit(.cancel(id: invocation.id)))
+    let cancellationBarrier = TranscriptionInvocation(
+      id: .init(epoch: invocation.id.epoch, generation: invocation.id.generation + 1),
+      format: .openAI
+    )
+    XCTAssertTrue(backend.submit(.begin(cancellationBarrier)))
+    _ = try await recorder.waitUntil {
+      if case .failure(_, id: cancellationBarrier.id, _) = $0 {
+        true
+      } else {
+        false
+      }
+    }
     await processor.releasePrepare()
     _ = try await recorder.waitUntil {
       if case .readiness(_, .ready) = $0 {

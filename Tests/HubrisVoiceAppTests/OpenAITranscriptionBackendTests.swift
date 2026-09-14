@@ -8,7 +8,8 @@ final class OpenAITranscriptionBackendTests: XCTestCase {
       apiKey: "",
       configuration: .init(languages: [], prompt: "", keywords: [], delay: .low)
     )
-    weak var releasedBackend = backend
+    weak var releasedBackend: OpenAITranscriptionBackend?
+    releasedBackend = backend
 
     backend = nil
     for _ in 0 ..< 20 where releasedBackend != nil {
