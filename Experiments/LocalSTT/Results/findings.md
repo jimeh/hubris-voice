@@ -105,7 +105,7 @@ sherpa's harness as a useful comparison.
 
 Both standalone Swift executables built successfully. The report validated all
 307 transcription rows, rejected duplicate recording/condition keys, and checked
-the cancellation/reset records. The repository's `mise run check` passed. No
-production Swift source or application dependency was changed. Microphone input,
-Accessibility capture, native permission prompts, and application insertion were
-not tested by this standalone experiment.
+the cancellation/reset records. The repository's `mise run check` passed. The
+original standalone experiment did not exercise the production Swift integration
+added separately in this change. Microphone input, Accessibility capture, native
+permission prompts, and application insertion were not tested by the experiment.

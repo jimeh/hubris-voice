@@ -1,8 +1,10 @@
 import Foundation
 
 public enum LocalVocabularyStore {
-  public enum StoreError: Error {
+  public enum StoreError: Error, Equatable {
     case invalidEncoding
+    case invalidPayload
+    case unsupportedVersion(Int)
   }
 
   public enum Key {
@@ -15,14 +17,19 @@ public enum LocalVocabularyStore {
     let entries: [LocalVocabularyEntry]
   }
 
-  public static func load(from store: SettingsStore) -> [LocalVocabularyEntry] {
-    guard
-      let encoded = store.string(Key.vocabulary),
-      let data = encoded.data(using: .utf8),
-      let payload = try? JSONDecoder().decode(Payload.self, from: data),
-      payload.version == 1
-    else {
-      return []
+  public static func load(from store: SettingsStore) throws -> [LocalVocabularyEntry] {
+    guard let encoded = store.string(Key.vocabulary) else { return [] }
+    guard let data = encoded.data(using: .utf8) else {
+      throw StoreError.invalidPayload
+    }
+    let payload: Payload
+    do {
+      payload = try JSONDecoder().decode(Payload.self, from: data)
+    } catch {
+      throw StoreError.invalidPayload
+    }
+    guard payload.version == 1 else {
+      throw StoreError.unsupportedVersion(payload.version)
     }
     return payload.entries
   }
@@ -43,7 +50,7 @@ public enum LocalVocabularyStore {
     in store: SettingsStore
   ) throws -> [LocalVocabularyEntry] {
     if store.bool(Key.cloudSeedCompleted) == true {
-      return load(from: store)
+      return try load(from: store)
     }
 
     if store.string(Key.vocabulary) == nil {
@@ -52,7 +59,8 @@ public enum LocalVocabularyStore {
       }
       try save(entries, to: store)
     }
+    let entries = try load(from: store)
     store.set(true, for: Key.cloudSeedCompleted)
-    return load(from: store)
+    return entries
   }
 }

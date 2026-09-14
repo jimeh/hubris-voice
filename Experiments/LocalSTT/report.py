@@ -131,7 +131,8 @@ lines += ["", "## Paced preview timing", "",
 for row in all_rows:
     if row.get("kind") == "result" and row.get("paced"):
         first = row["previews"][0]["wall_seconds"] * 1000 if row["previews"] else None
-        lines.append(f'| {row["experiment"]} | {row["id"]} | {row["mode"]} | {first:.1f} | '
+        first_display = f"{first:.1f}" if first is not None else "n/a"
+        lines.append(f'| {row["experiment"]} | {row["id"]} | {row["mode"]} | {first_display} | '
                      f'{row["release_to_final_seconds"] * 1000:.1f} |')
 (OUT / "summary.md").write_text("\n".join(lines) + "\n")
 print("\n".join(checks))

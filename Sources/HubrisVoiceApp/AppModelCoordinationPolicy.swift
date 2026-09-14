@@ -2,6 +2,13 @@ import Foundation
 import HubrisVoiceCore
 
 enum AppModelCoordinationPolicy {
+  enum LocalConfigurationResult: Equatable {
+    case applied
+    case requiresFullReplacement
+  }
+
+  static let maximumLocalConfigurationAttempts = 200
+
   struct EngineReplacement {
     let coordinatorEpoch: TranscriptionBackendEpoch
     let newEpoch: TranscriptionBackendEpoch
@@ -15,6 +22,26 @@ enum AppModelCoordinationPolicy {
     pendingConfiguration: Bool
   ) -> Bool {
     !changingEngine && !pendingConfiguration
+  }
+
+  @MainActor
+  static func applyLocalConfiguration(
+    maximumAttempts: Int = maximumLocalConfigurationAttempts,
+    retryDelay: Duration = .milliseconds(25),
+    update: () async throws -> Bool,
+    sleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+  ) async throws -> LocalConfigurationResult {
+    precondition(maximumAttempts > 0)
+    for attempt in 1 ... maximumAttempts {
+      try Task.checkCancellation()
+      if try await update() {
+        return .applied
+      }
+      if attempt < maximumAttempts {
+        try await sleep(retryDelay)
+      }
+    }
+    return .requiresFullReplacement
   }
 
   static func applyEngineReplacement(

@@ -13,7 +13,14 @@ struct DictionarySettingsTab: View {
   var body: some View {
     Form {
       if localModels.engine == .fluidAudio {
-        LocalDictionaryEditor(entries: $localModels.entries)
+        if let error = localModels.dictionaryError {
+          Section("Local dictionary unavailable") {
+            Text(error)
+              .foregroundStyle(.secondary)
+          }
+        } else {
+          LocalDictionaryEditor(entries: $localModels.entries)
+        }
       } else {
         Section {
           Text("These terms are sent to OpenAI. Select On-device in Dictation to edit your separate local dictionary.")

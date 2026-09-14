@@ -60,7 +60,32 @@ def term_guard(original, corrected, terms, aliases):
     before = list(re.finditer(r"\S+", original))
     after = list(re.finditer(r"\S+", corrected))
     protected = set("a an the and or but if then than to of on in at by for from with as is are was were be been being it this that these those we you i he she they my your our their".split())
-    lookup = {" ".join(t.split()): t for t in terms}
+    terms = [" ".join(term.split()) for term in terms]
+
+    def is_boundary(character):
+        return not character.isalnum() and character != "_"
+
+    def canonical_term(candidate):
+        candidate = " ".join(candidate.split())
+        for term in terms:
+            start = candidate.find(term)
+            if start < 0:
+                continue
+            prefix = candidate[:start]
+            suffix = candidate[start + len(term):]
+            if all(map(is_boundary, prefix)) and all(map(is_boundary, suffix)):
+                return term
+        return None
+
+    def boundary_prefix(text):
+        for index, character in enumerate(text):
+            if not is_boundary(character):
+                return text[:index]
+        return text
+
+    def boundary_suffix(text):
+        return boundary_prefix(text[::-1])[::-1]
+
     changes = []
     edits = []
     for tag, a, b, c, d in difflib.SequenceMatcher(
@@ -69,7 +94,7 @@ def term_guard(original, corrected, terms, aliases):
             continue
         raw = " ".join(m[0] for m in before[a:b])
         proposed = " ".join(m[0] for m in after[c:d])
-        canonical = lookup.get(proposed.strip(".,!?;:"))
+        canonical = canonical_term(proposed)
         reason = "not an isolated canonical substitution"
         accepted = False
         if tag == "replace" and canonical is not None:
@@ -78,10 +103,18 @@ def term_guard(original, corrected, terms, aliases):
             if not (set(words(raw)) & protected) or normalized in known:
                 accepted = True
                 reason = "canonical substitution with preserved boundaries"
-                # Native correction often drops punctuation; retain the raw span's
-                # trailing punctuation and every byte outside the accepted span.
-                suffix = re.search(r"[.,!?;:]+$", before[b - 1][0])
-                edits.append((before[a].start(), before[b - 1].end(), canonical + (suffix[0] if suffix else "")))
+                # Native correction often drops punctuation. Retain both raw
+                # boundaries without duplicating punctuation in terms like .NET
+                # and C++.
+                prefix = boundary_prefix(before[a][0])
+                suffix = boundary_suffix(before[b - 1][0])
+                canonical_prefix = boundary_prefix(canonical)
+                canonical_suffix = boundary_suffix(canonical)
+                if canonical_prefix and prefix.endswith(canonical_prefix):
+                    prefix = prefix[:-len(canonical_prefix)]
+                if canonical_suffix and suffix.startswith(canonical_suffix):
+                    suffix = suffix[len(canonical_suffix):]
+                edits.append((before[a].start(), before[b - 1].end(), prefix + canonical + suffix))
             else:
                 reason = "would consume a protected word without an explicit alias"
         changes.append(dict(before=raw, after=proposed, accepted=accepted, reason=reason))
@@ -102,6 +135,8 @@ def checks():
     assert term_guard("Open this on macOS with Tensor RT.", "Open this macOS with TensorRT", ["TensorRT"], {})[0] == "Open this on macOS with TensorRT."
     assert term_guard("ask the Quaxal", "ask Quexal", ["Quexal"], {})[0] == "ask the Quaxal"
     assert term_guard("user underscore ID, please", "user_id please", ["user_id"], aliases)[0] == "user_id, please"
+    assert term_guard("Use (.net).", "Use (.NET).", [".NET"], {})[0] == "Use (.NET)."
+    assert term_guard("Use (c plus plus).", "Use (C++).", ["C++"], {})[0] == "Use (C++)."
     assert term_guard("say hello", "say Kubernetes hello", ["Kubernetes"], {})[0] == "say hello"
     print("PASS: structural aliases, exact boundaries, ambiguity rejection, canonical stability, deletion/insertion rejection, protected words, punctuation")
 

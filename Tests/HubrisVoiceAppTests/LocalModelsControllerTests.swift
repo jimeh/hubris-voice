@@ -5,6 +5,44 @@ import XCTest
 
 @MainActor
 final class LocalModelsControllerTests: XCTestCase {
+  func testInvalidVocabularyDisablesEditingAndPreservesPersistedData() throws {
+    let fixture = try makeFixture()
+    defer { fixture.clean() }
+    let encoded = "{not-json"
+    fixture.defaults.set(encoded, forKey: LocalVocabularyStore.Key.vocabulary)
+    fixture.defaults.removeObject(forKey: LocalVocabularyStore.Key.cloudSeedCompleted)
+
+    let controller = LocalModelsController(
+      settings: UserDefaultsSettingsStore(fixture.defaults),
+      store: controllerStore(in: fixture.root)
+    )
+
+    XCTAssertFalse(controller.isDictionaryAvailable)
+    XCTAssertNotNil(controller.dictionaryError)
+    controller.entries.append(LocalVocabularyEntry(canonicalText: "MustNotPersist"))
+    XCTAssertTrue(controller.entries.isEmpty)
+    XCTAssertEqual(fixture.defaults.string(forKey: LocalVocabularyStore.Key.vocabulary), encoded)
+    XCTAssertFalse(fixture.defaults.bool(forKey: LocalVocabularyStore.Key.cloudSeedCompleted))
+  }
+
+  func testFutureVocabularyVersionReportsDistinctErrorAndPreservesPersistedData() throws {
+    let fixture = try makeFixture()
+    defer { fixture.clean() }
+    let encoded = "{\"version\":2,\"entries\":[]}"
+    fixture.defaults.set(encoded, forKey: LocalVocabularyStore.Key.vocabulary)
+
+    let controller = LocalModelsController(
+      settings: UserDefaultsSettingsStore(fixture.defaults),
+      store: controllerStore(in: fixture.root)
+    )
+
+    XCTAssertFalse(controller.isDictionaryAvailable)
+    XCTAssertEqual(controller.dictionaryError?.contains("newer version"), true)
+    controller.entries = [LocalVocabularyEntry(canonicalText: "MustNotPersist")]
+    XCTAssertTrue(controller.entries.isEmpty)
+    XCTAssertEqual(fixture.defaults.string(forKey: LocalVocabularyStore.Key.vocabulary), encoded)
+  }
+
   func testCorrectionRemovalPreservesManualUnloadAndRestoresPriorReadiness() async throws {
     let fixture = try makeFixture()
     defer { fixture.clean() }
@@ -62,6 +100,10 @@ final class LocalModelsControllerTests: XCTestCase {
       suite: suite,
       root: root
     )
+  }
+
+  private func controllerStore(in root: URL) -> LocalModelStore {
+    LocalModelStore(root: root)
   }
 }
 

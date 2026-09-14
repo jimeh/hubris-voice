@@ -1458,7 +1458,7 @@ private extension AppModel {
     prepareSelectedEngine()
   }
 
-  // swiftlint:disable:next function_body_length
+  // swiftlint:disable:next cyclomatic_complexity function_body_length
   func replaceSelectedEngine(prewarm: Bool = true) async {
     guard isQuiescent, !changingEngine else { return }
     changingEngine = true
@@ -1470,13 +1470,19 @@ private extension AppModel {
     if prewarm, selection == .fluidAudio, activeEngine == .fluidAudio,
        localModels.modelID == LocalModelCatalog.primaryID, let localBackend
     {
+      let configurationResult: AppModelCoordinationPolicy.LocalConfigurationResult
       do {
-        while try await !localBackend.updateConfiguration(
-          context: context,
-          correctionPolicy: policy
-        ) {
-          try await Task.sleep(for: .milliseconds(25))
+        configurationResult = try await AppModelCoordinationPolicy.applyLocalConfiguration {
+          try await localBackend.updateConfiguration(
+            context: context,
+            correctionPolicy: policy
+          )
         }
+      } catch is CancellationError {
+        localModels.pendingConfiguration = true
+        changingEngine = false
+        localModels.isDictating = false
+        return
       } catch {
         changingEngine = false
         localModels.isDictating = false
@@ -1486,15 +1492,18 @@ private extension AppModel {
         }
         return
       }
-      activeLocalEntries = context.permanentEntries
-      changingEngine = false
-      localModels.isDictating = false
-      if localModels.pendingConfiguration {
-        await replaceSelectedEngine()
-      } else if !localModelManuallyUnloaded {
-        prepareSelectedEngine()
+      if configurationResult == .applied {
+        activeLocalEntries = context.permanentEntries
+        changingEngine = false
+        localModels.isDictating = false
+        if localModels.pendingConfiguration {
+          await replaceSelectedEngine()
+        } else if !localModelManuallyUnloaded {
+          prepareSelectedEngine()
+        }
+        return
       }
-      return
+      // A persistently busy backend falls through to the full replacement path below.
     }
     captureFinalizer.finish()
     configurationEventTask?.cancel()

@@ -27,15 +27,29 @@ final class LocalModelsController: ObservableObject {
 
   @Published var entries: [LocalVocabularyEntry] {
     didSet {
+      // Published assignments re-enter this observer, so rollback must bypass persistence.
+      if restoringEntries {
+        restoringEntries = false
+        return
+      }
+      guard dictionaryError == nil else {
+        restoringEntries = true
+        entries = oldValue
+        return
+      }
       do {
         try LocalVocabularyStore.save(entries, to: settings)
       } catch {
-        message = "The local dictionary could not be saved."
+        dictionaryError = "The local dictionary could not be saved. Its previous contents were left unchanged."
+        restoringEntries = true
+        entries = oldValue
+        return
       }
       onConfigurationChanged?()
     }
   }
 
+  @Published private(set) var dictionaryError: String?
   @Published private(set) var installedIDs: Set<String> = []
   @Published private(set) var downloadingID: String?
   @Published private(set) var progress: LocalModelProgress?
@@ -57,6 +71,11 @@ final class LocalModelsController: ObservableObject {
   var onSupplementalRemovalFinished: ((Bool) -> Void)?
   private let settings: any SettingsStore
   private var downloadTask: Task<Void, Never>?
+  private var restoringEntries = false
+
+  var isDictionaryAvailable: Bool {
+    dictionaryError == nil
+  }
 
   static var hardwareSupported: Bool {
     #if arch(arm64)
@@ -73,9 +92,21 @@ final class LocalModelsController: ObservableObject {
     modelID = preferences.localModel
     engine = preferences.engine
     correctionEnabled = preferences.correctionEnabled
-    entries = (try? LocalVocabularyStore.seedFromCloudIfNeeded(
-      settings.stringArray(DictationSettings.Key.dictionary) ?? [], in: settings
-    )) ?? []
+    do {
+      entries = try LocalVocabularyStore.seedFromCloudIfNeeded(
+        settings.stringArray(DictationSettings.Key.dictionary) ?? [], in: settings
+      )
+      dictionaryError = nil
+    } catch LocalVocabularyStore.StoreError.unsupportedVersion {
+      entries = []
+      dictionaryError =
+        "The local dictionary was created by a newer version of Hubris Voice. "
+          + "Update the app to edit it. The saved dictionary was left unchanged."
+    } catch {
+      entries = []
+      dictionaryError =
+        "The saved local dictionary could not be read. Restore or remove it before editing. The saved dictionary was left unchanged."
+    }
   }
 
   func refresh() async {

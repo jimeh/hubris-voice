@@ -40,7 +40,8 @@ def digest(file, algorithm="sha256"):
 def fetch(url, file):
     file.parent.mkdir(parents=True, exist_ok=True)
     temporary = file.with_name(file.name + ".partial")
-    run("curl", "-fLsS", "--retry", "3", "-o", temporary, url)
+    run("curl", "-fLsS", "--connect-timeout", "30", "--max-time", "3600",
+        "--retry", "3", "-o", temporary, url)
     temporary.replace(file)
 
 
@@ -79,7 +80,9 @@ def prepare_models():
     ]
     inventory = []
     for repo, revision, directory, roots in specifications:
-        with urllib.request.urlopen(f"https://huggingface.co/api/models/{repo}/tree/{revision}?recursive=true&limit=1000") as response:
+        with urllib.request.urlopen(
+                f"https://huggingface.co/api/models/{repo}/tree/{revision}?recursive=true&limit=1000",
+                timeout=30) as response:
             files = json.load(response)
         for item in files:
             relative = item["path"]

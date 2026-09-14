@@ -59,7 +59,7 @@ final class LocalVocabularyTests: XCTestCase {
 
     try LocalVocabularyStore.save(entries, to: store)
 
-    XCTAssertEqual(LocalVocabularyStore.load(from: store), entries)
+    XCTAssertEqual(try LocalVocabularyStore.load(from: store), entries)
     XCTAssertEqual(store.string(LocalVocabularyStore.Key.vocabulary)?.contains("\"version\":1"), true)
   }
 
@@ -83,12 +83,39 @@ final class LocalVocabularyTests: XCTestCase {
     XCTAssertEqual(store.stringArray(cloudKey), ["CloudOnly"])
   }
 
-  func testUnknownStoreVersionDoesNotLoad() {
+  func testMalformedStorePayloadThrowsWithoutChangingPersistedData() {
+    let encoded = "{not-json"
     let store = MemoryLocalSettingsStore(values: [
-      LocalVocabularyStore.Key.vocabulary: "{\"version\":2,\"entries\":[]}",
+      LocalVocabularyStore.Key.vocabulary: encoded,
     ])
 
-    XCTAssertEqual(LocalVocabularyStore.load(from: store), [])
+    XCTAssertThrowsError(try LocalVocabularyStore.load(from: store)) { error in
+      XCTAssertEqual(error as? LocalVocabularyStore.StoreError, .invalidPayload)
+    }
+    XCTAssertEqual(store.string(LocalVocabularyStore.Key.vocabulary), encoded)
+  }
+
+  func testUnknownStoreVersionThrowsWithoutChangingPersistedData() {
+    let encoded = "{\"version\":2,\"entries\":[]}"
+    let store = MemoryLocalSettingsStore(values: [
+      LocalVocabularyStore.Key.vocabulary: encoded,
+    ])
+
+    XCTAssertThrowsError(try LocalVocabularyStore.load(from: store)) { error in
+      XCTAssertEqual(error as? LocalVocabularyStore.StoreError, .unsupportedVersion(2))
+    }
+    XCTAssertEqual(store.string(LocalVocabularyStore.Key.vocabulary), encoded)
+  }
+
+  func testInvalidExistingPayloadDoesNotCompleteOrOverwriteCloudSeed() {
+    let encoded = "{not-json"
+    let store = MemoryLocalSettingsStore(values: [
+      LocalVocabularyStore.Key.vocabulary: encoded,
+    ])
+
+    XCTAssertThrowsError(try LocalVocabularyStore.seedFromCloudIfNeeded(["CloudOnly"], in: store))
+    XCTAssertEqual(store.string(LocalVocabularyStore.Key.vocabulary), encoded)
+    XCTAssertNil(store.bool(LocalVocabularyStore.Key.cloudSeedCompleted))
   }
 }
 

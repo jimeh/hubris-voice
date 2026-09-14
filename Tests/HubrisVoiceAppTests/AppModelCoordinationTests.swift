@@ -5,6 +5,59 @@ import XCTest
 
 @MainActor
 final class AppModelCoordinationTests: XCTestCase {
+  func testLocalConfigurationFallsBackAfterBoundedBusyResponses() async throws {
+    var updateCount = 0
+    var sleepCount = 0
+
+    let result = try await AppModelCoordinationPolicy.applyLocalConfiguration(
+      maximumAttempts: 3,
+      update: {
+        updateCount += 1
+        return false
+      },
+      sleep: { _ in sleepCount += 1 }
+    )
+
+    XCTAssertEqual(result, .requiresFullReplacement)
+    XCTAssertEqual(updateCount, 3)
+    XCTAssertEqual(sleepCount, 2)
+  }
+
+  func testLocalConfigurationAppliesWhenBackendBecomesIdleWithinBound() async throws {
+    var updateCount = 0
+
+    let result = try await AppModelCoordinationPolicy.applyLocalConfiguration(
+      maximumAttempts: 3,
+      update: {
+        updateCount += 1
+        return updateCount == 3
+      },
+      sleep: { _ in }
+    )
+
+    XCTAssertEqual(result, .applied)
+    XCTAssertEqual(updateCount, 3)
+  }
+
+  func testLocalConfigurationPreservesCancellation() async {
+    var updateCount = 0
+    do {
+      _ = try await AppModelCoordinationPolicy.applyLocalConfiguration(
+        maximumAttempts: 3,
+        update: {
+          updateCount += 1
+          return false
+        },
+        sleep: { _ in throw CancellationError() }
+      )
+      XCTFail("Cancellation must escape the retry policy")
+    } catch is CancellationError {
+      XCTAssertEqual(updateCount, 1)
+    } catch {
+      XCTFail("Unexpected error: \(error)")
+    }
+  }
+
   func testInsertionAdmissionRejectsEngineChangesAndPendingConfiguration() {
     XCTAssertTrue(AppModelCoordinationPolicy.acceptsNewInsertion(
       changingEngine: false,

@@ -22,7 +22,7 @@ final class TranscriptionPreferencesTests: XCTestCase {
     XCTAssertTrue(json.contains("CloudVocabulary"))
     XCTAssertFalse(json.contains("PrivateCanonicalSentinel"))
     XCTAssertFalse(json.contains("private alias sentinel"))
-    XCTAssertEqual(LocalVocabularyStore.load(from: store).count, 1)
+    XCTAssertEqual(try LocalVocabularyStore.load(from: store).count, 1)
   }
 
   func testLocalSelectionSurvivesWithoutInstallationAndDoesNotChangeCloudSettings() {
