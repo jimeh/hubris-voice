@@ -10,7 +10,7 @@ pre-commit:
       stage_fixed: true
 
     - name: vendor-integrity
-      glob: "{Vendor/**,third-party/vendor/**,Scripts/vendor*.ts}"
+      glob: "{Vendor/**,third-party/vendor/**,Scripts/vendor*.ts,Scripts/vendor-LICENSE,package.json,bun.lock,bunfig.toml,tsconfig.json,mise.toml,mise.lock,lefthook.yml}"
       run: mise run vendor:index-check && mise run vendor:check
 
     - name: tooling

@@ -1,8 +1,8 @@
 diff --git a/Sources/FluidAudio/Shared/AppLogger.swift b/Sources/FluidAudio/Shared/AppLogger.swift
-index df44699..85005c2 100644
+index df44699fa0f0dfb4821c29e67010e281894072fe..c22b97d2c94104594647f872e7c949188db00ff3 100644
 --- a/Sources/FluidAudio/Shared/AppLogger.swift
 +++ b/Sources/FluidAudio/Shared/AppLogger.swift
-@@ -1,12 +1,9 @@
+@@ -1,12 +1,11 @@
 -import Foundation
 -import OSLog
 -
@@ -11,8 +11,10 @@ index df44699..85005c2 100644
 +/// FluidAudio's logging facade, disabled by Hubris Voice to keep transcript and
 +/// vocabulary contents out of stderr and Unified Logging.
 +///
-+/// Modified from FluidAudio 0.15.7 by Hubris Voice. See `UPSTREAM.md` and
-+/// `Patches/hubris.patch` for provenance and the complete patch.
++/// Modified from FluidAudio 0.15.7 by Hubris Voice. See
++/// `third-party/vendor/README.md`, `third-party/vendor/sources.json`, and
++/// `third-party/vendor/patches/fluidaudio/privacy-logging.patch` for provenance
++/// and the complete patch.
  public struct AppLogger: Sendable {
 -    /// Default subsystem for all loggers in FluidAudio.
 -    /// Keep this consistent; categories should vary per component.
@@ -20,7 +22,7 @@ index df44699..85005c2 100644
      nonisolated(unsafe) public static var defaultSubsystem: String = "com.fluidinference"
  
      public enum Level: Int, Sendable {
-@@ -18,147 +15,19 @@ public struct AppLogger: Sendable {
+@@ -18,147 +17,19 @@ public struct AppLogger: Sendable {
          case fault
      }
  

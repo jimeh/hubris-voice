@@ -77,11 +77,11 @@ Treat an upstream upgrade as a reviewed recipe change:
 2. Download only that commit's GitHub `.tar.gz` archive. Record the archive
    SHA-256 and exact single top-level directory in `sources.json`.
 3. Review the archive inventory and confirm every selected path still exists.
-   Keep `Package.swift`, `Package@swift-6.2.swift`, `LICENSE`, `Sources`,
-   the three selected library source targets under `Sources`, and
-   `ThirdPartyLicenses` unless a deliberate, documented packaging change
-   requires a different complete set. The FluidAudio CLI and tests are outside
-   the vendored build inventory.
+   Keep `Package.swift`, `Package@swift-6.2.swift`, `LICENSE`,
+   `Sources/FastClusterWrapper`, `Sources/FluidAudio`,
+   `Sources/MachTaskSelfWrapper`, and `ThirdPartyLicenses` unless a deliberate,
+   documented packaging change requires a different complete set. The
+   FluidAudio CLI and tests are outside the vendored build inventory.
 4. Preserve the old recipe outside the build tree, replace
    `Vendor/FluidAudio` with the new selected archive paths, and temporarily
    set the new manifest entry's patch list to empty. Run `vendor:check` to

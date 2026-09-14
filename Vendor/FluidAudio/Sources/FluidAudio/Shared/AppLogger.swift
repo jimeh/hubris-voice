@@ -1,8 +1,10 @@
 /// FluidAudio's logging facade, disabled by Hubris Voice to keep transcript and
 /// vocabulary contents out of stderr and Unified Logging.
 ///
-/// Modified from FluidAudio 0.15.7 by Hubris Voice. See `UPSTREAM.md` and
-/// `Patches/hubris.patch` for provenance and the complete patch.
+/// Modified from FluidAudio 0.15.7 by Hubris Voice. See
+/// `third-party/vendor/README.md`, `third-party/vendor/sources.json`, and
+/// `third-party/vendor/patches/fluidaudio/privacy-logging.patch` for provenance
+/// and the complete patch.
 public struct AppLogger: Sendable {
     nonisolated(unsafe) public static var defaultSubsystem: String = "com.fluidinference"
 
