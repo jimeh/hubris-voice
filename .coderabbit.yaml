@@ -2,6 +2,7 @@
 # in the pinned upstream snapshot. mise run lint:vendor verifies that snapshot.
 reviews:
   path_filters:
+    - "**"
     - "!Vendor/FluidAudio/Sources/**"
     - "!Vendor/FluidAudio/ThirdPartyLicenses/**"
     - "Vendor/FluidAudio/Patches/**"
