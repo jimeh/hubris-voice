@@ -133,6 +133,30 @@ final class OpenAITranscriptionBackendTests: XCTestCase {
     XCTAssertEqual(event, .preview(id: next.id, text: "New"))
   }
 
+  func testCancellingInferredItemWithPendingCommitReplacesConnection() async throws {
+    let fixture = await Fixture.make()
+    let cancelled = fixture.invocation(0)
+    await fixture.backend.testingHandle(.begin(cancelled))
+    await fixture.backend.testingHandle(.append(id: cancelled.id, sequence: 0, audio: Data([1])))
+    await fixture.backend.testingReceive(.transcriptDelta(itemID: "cancelled-item", delta: "Old"))
+    let preview = try await fixture.next()
+    XCTAssertEqual(preview, .preview(id: cancelled.id, text: "Old"))
+    await fixture.backend.testingHandle(.finish(id: cancelled.id))
+
+    let commitEventID = await fixture.backend.testingCommitEventID(for: cancelled.id)
+    XCTAssertNotNil(commitEventID)
+    await fixture.backend.testingHandle(.cancel(id: cancelled.id))
+
+    let recovering = try await fixture.next()
+    XCTAssertEqual(
+      recovering,
+      .readiness(
+        epoch: fixture.epoch,
+        state: .recovering(message: "Reconnecting after cancelled dictation.")
+      )
+    )
+  }
+
   func testNextInvocationRemainsBufferedUntilCurrentFinalCompletes() async throws {
     let fixture = await Fixture.make()
     let first = fixture.invocation(0)

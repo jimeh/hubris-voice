@@ -404,7 +404,10 @@ private actor OpenAITranscriptionState {
     guard var invocation = invocations[id], !invocation.isCancelled else { return }
     let wasActive = activeInputID == id
     invocation.isCancelled = true
-    let requiresFreshAttempt = wasActive && suppressUnknownItemInference(for: invocation)
+    let hadPendingCommit = awaitingCommits.contains { $0.id == id }
+    let requiresFreshAttempt = wasActive && (
+      hadPendingCommit || suppressUnknownItemInference(for: invocation)
+    )
     _ = retire(id, suppressUnassignedItemInference: false)
     awaitingCommits.removeAll { $0.id == id }
     if wasActive, isReady, !requiresFreshAttempt, !invocation.isFinished,
@@ -637,15 +640,6 @@ private actor OpenAITranscriptionState {
     preview.text += delta
     preview.byteCount += byteCount
     bufferedProviderPreviews[itemID] = preview
-  }
-
-  private func bindActiveBufferedPreviewIfUnambiguous() {
-    guard !didOverflowBufferedProviderItems, !isUnknownItemInferenceSuppressed,
-          awaitingCommits.isEmpty,
-          bufferedProviderPreviews.count == 1,
-          let itemID = bufferedProviderPreviews.keys.first
-    else { return }
-    bindActiveItem(itemID: itemID, delta: "")
   }
 
   private func bindActiveItem(itemID: String, delta: String) {

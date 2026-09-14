@@ -342,6 +342,65 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
     XCTAssertEqual(correctionReleaseCount, 2)
   }
 
+  func testUnloadDuringSupersededLeaseReleaseDoesNotEmitStaleReady() async throws {
+    let processor = FakeFluidAudioProcessor(
+      final: FluidAudioProcessResult(rawText: "unused", candidateText: nil)
+    )
+    let primaryReleases = ReleaseRecorder()
+    let correctionReleases = ReleaseRecorder(blockNext: true)
+    let backend = FluidAudioTranscriptionBackend(
+      context: LocalInvocationContext(permanentEntries: [
+        LocalVocabularyEntry(canonicalText: "PostgreSQL"),
+      ]),
+      correctionPolicy: .strict,
+      processor: processor,
+      acquireModels: { _, _ in
+        FluidAudioModelLease(
+          primaryDirectory: URL(fileURLWithPath: "/owned/primary"),
+          release: { await primaryReleases.record() }
+        )
+      },
+      acquireCorrection: {
+        FluidAudioCorrectionLease(
+          directory: URL(fileURLWithPath: "/owned/ctc"),
+          release: { await correctionReleases.record() }
+        )
+      }
+    )
+    let recorder = EventRecorder(stream: backend.events)
+    let epoch = TranscriptionBackendEpoch(8)
+
+    XCTAssertTrue(backend.submit(.prepare(epoch: epoch)))
+    _ = try await recorder.waitUntil {
+      if case .readiness(_, .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+    let eventCountBeforeSecondPreparation = await recorder.snapshot().count
+    XCTAssertTrue(backend.submit(.prepare(epoch: epoch)))
+    try await correctionReleases.waitUntilBlocked()
+
+    let unloadTask = Task { await backend.unload() }
+    try await Task.sleep(for: .milliseconds(20))
+    await correctionReleases.resume()
+    await unloadTask.value
+
+    let laterEvents = await recorder.snapshot().dropFirst(eventCountBeforeSecondPreparation)
+    XCTAssertFalse(laterEvents.contains {
+      if case .readiness(_, .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    })
+    let primaryReleaseCount = await primaryReleases.count()
+    let correctionReleaseCount = await correctionReleases.count()
+    XCTAssertEqual(primaryReleaseCount, 2)
+    XCTAssertEqual(correctionReleaseCount, 2)
+  }
+
   func testIdleConfigurationUpdateKeepsPrimaryLoadedAndAppliesToNextInvocation() async throws {
     let processor = FakeFluidAudioProcessor(
       final: FluidAudioProcessResult(
@@ -967,13 +1026,39 @@ private actor FakeFluidAudioProcessor: FluidAudioProcessing {
 
 private actor ReleaseRecorder {
   private var releases = 0
+  private var shouldBlockNext: Bool
+  private var isBlocked = false
+  private var continuation: CheckedContinuation<Void, Never>?
 
-  func record() {
+  init(blockNext: Bool = false) {
+    shouldBlockNext = blockNext
+  }
+
+  func record() async {
     releases += 1
+    guard shouldBlockNext else { return }
+    shouldBlockNext = false
+    isBlocked = true
+    await withCheckedContinuation { continuation in
+      self.continuation = continuation
+    }
+    isBlocked = false
   }
 
   func count() -> Int {
     releases
+  }
+
+  func waitUntilBlocked() async throws {
+    for _ in 0 ..< 200 where !isBlocked {
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    guard isBlocked else { throw TestWaitError.timedOut }
+  }
+
+  func resume() {
+    continuation?.resume()
+    continuation = nil
   }
 }
 

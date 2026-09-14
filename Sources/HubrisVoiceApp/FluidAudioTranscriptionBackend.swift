@@ -117,6 +117,7 @@ private actor FluidAudioTranscriptionState {
   private var correctionLease: FluidAudioCorrectionLease?
   private var isPrepared = false
   private var isReconfiguring = false
+  private var preparationGeneration = 0
   private var preparationTask: Task<Void, Never>?
   private var operationTask: Task<Void, Never>?
   private var order: [TranscriptionInvocationID] = []
@@ -155,6 +156,7 @@ private actor FluidAudioTranscriptionState {
   }
 
   func unload() async {
+    preparationGeneration &+= 1
     let pendingPreparation = preparationTask
     let pendingOperation = operationTask
     pendingPreparation?.cancel()
@@ -243,6 +245,8 @@ private actor FluidAudioTranscriptionState {
   }
 
   private func prepare(epoch: TranscriptionBackendEpoch) {
+    preparationGeneration &+= 1
+    let generation = preparationGeneration
     self.epoch = epoch
     events.yield(.readiness(epoch: epoch, state: .preparing(message: "Loading local model…")))
     preparationTask?.cancel()
@@ -272,11 +276,16 @@ private actor FluidAudioTranscriptionState {
           await lease.release()
           return
         }
-        await prepared(lease: lease, correctionLease: correctionLease, epoch: epoch)
+        await prepared(
+          lease: lease,
+          correctionLease: correctionLease,
+          epoch: epoch,
+          generation: generation
+        )
       } catch is CancellationError {
         return
       } catch {
-        await self?.preparationFailed(error, epoch: epoch)
+        await self?.preparationFailed(error, epoch: epoch, generation: generation)
       }
     }
   }
@@ -284,9 +293,10 @@ private actor FluidAudioTranscriptionState {
   private func prepared(
     lease: FluidAudioModelLease,
     correctionLease: FluidAudioCorrectionLease?,
-    epoch: TranscriptionBackendEpoch
+    epoch: TranscriptionBackendEpoch,
+    generation: Int
   ) async {
-    guard self.epoch == epoch else {
+    guard self.epoch == epoch, preparationGeneration == generation else {
       await correctionLease?.release()
       await lease.release()
       return
@@ -296,15 +306,20 @@ private actor FluidAudioTranscriptionState {
     self.lease = lease
     self.correctionLease = correctionLease
     isPrepared = true
-    preparationTask = nil
     await previousCorrectionLease?.release()
     await previousLease?.release()
+    guard self.epoch == epoch, preparationGeneration == generation else { return }
+    preparationTask = nil
     events.yield(.readiness(epoch: epoch, state: .ready))
     pump()
   }
 
-  private func preparationFailed(_: Error, epoch: TranscriptionBackendEpoch) {
-    guard self.epoch == epoch else { return }
+  private func preparationFailed(
+    _: Error,
+    epoch: TranscriptionBackendEpoch,
+    generation: Int
+  ) {
+    guard self.epoch == epoch, preparationGeneration == generation else { return }
     preparationTask = nil
     isPrepared = false
     let pending = order
