@@ -91,15 +91,29 @@ final class OpenAITranscriptionBackendTests: XCTestCase {
     await fixture.backend.testingHandle(.append(id: old.id, sequence: 0, audio: Data([1])))
     await fixture.backend.testingHandle(.finish(id: old.id))
     await fixture.backend.testingHandle(.cancel(id: old.id))
-    await fixture.backend.testingReceive(.inputCommitted(itemID: "old-item"))
+    let recovering = try await fixture.next()
+    XCTAssertEqual(
+      recovering,
+      .readiness(
+        epoch: fixture.epoch,
+        state: .recovering(message: "Reconnecting after cancelled dictation.")
+      )
+    )
 
     let next = fixture.invocation(1)
     await fixture.backend.testingHandle(.begin(next))
     await fixture.backend.testingHandle(.append(id: next.id, sequence: 0, audio: Data([2])))
-    await fixture.backend.testingReceive(.transcriptDelta(itemID: "old-item", delta: "Old"))
+    await fixture.backend.testingReceive(
+      .transcriptDelta(itemID: "old-item", delta: "Old"),
+      attemptID: "test-attempt"
+    )
+    await fixture.backend.testingSetReady(epoch: fixture.epoch, attemptID: "replacement-attempt")
+    let ready = try await fixture.next()
+    XCTAssertEqual(
+      ready,
+      .readiness(epoch: fixture.epoch, state: .ready)
+    )
     await fixture.backend.testingReceive(.transcriptDelta(itemID: "new-item", delta: "New"))
-    await fixture.backend.testingHandle(.finish(id: next.id))
-    await fixture.backend.testingReceive(.inputCommitted(itemID: "new-item"))
     let event = try await fixture.next()
     XCTAssertEqual(event, .preview(id: next.id, text: "New"))
   }
@@ -128,64 +142,45 @@ final class OpenAITranscriptionBackendTests: XCTestCase {
     XCTAssertEqual(completedPreview, .preview(id: next.id, text: "New words"))
   }
 
-  func testCancellingUnassignedInputPreservesOlderExactPreview() async throws {
-    let fixture = await Fixture.make()
-    let old = fixture.invocation(0)
-    await fixture.backend.testingHandle(.begin(old))
-    await fixture.backend.testingHandle(.append(id: old.id, sequence: 0, audio: Data([1])))
-    await fixture.backend.testingHandle(.finish(id: old.id))
-
-    let cancelled = fixture.invocation(1)
-    await fixture.backend.testingHandle(.begin(cancelled))
-    await fixture.backend.testingHandle(.append(id: cancelled.id, sequence: 0, audio: Data([2])))
-    await fixture.backend.testingReceive(.transcriptDelta(itemID: "old-item", delta: "Old"))
-    await fixture.backend.testingReceive(.transcriptDelta(itemID: "cancelled-item", delta: "Stale"))
-    await fixture.backend.testingHandle(.cancel(id: cancelled.id))
-    await fixture.backend.testingReceive(.inputCommitted(itemID: "old-item"))
-    await fixture.backend.testingReceive(
-      .transcriptCompleted(itemID: "old-item", transcript: "Older final")
-    )
-    let olderPreview = try await fixture.next()
-    let olderFinal = try await fixture.next()
-    XCTAssertEqual(olderPreview, .preview(id: old.id, text: "Old"))
-    XCTAssertEqual(
-      olderFinal,
-      .final(id: old.id, result: .init(text: "Older final", correction: .disabled))
-    )
-
-    let replacement = fixture.invocation(2)
-    await fixture.backend.testingHandle(.begin(replacement))
-    await fixture.backend.testingHandle(.append(id: replacement.id, sequence: 0, audio: Data([3])))
-    await fixture.backend.testingReceive(.transcriptDelta(itemID: "cancelled-item", delta: " stale"))
-    await fixture.backend.testingReceive(.transcriptDelta(itemID: "replacement-item", delta: "Fresh"))
-    await fixture.backend.testingHandle(.finish(id: replacement.id))
-    await fixture.backend.testingReceive(.inputCommitted(itemID: "replacement-item"))
-
-    let preview = try await fixture.next()
-    XCTAssertEqual(preview, .preview(id: replacement.id, text: "Fresh"))
-  }
-
   func testLateFirstDeltaFromCancelledInputCannotBindReplacement() async throws {
     let fixture = await Fixture.make()
     let cancelled = fixture.invocation(0)
     await fixture.backend.testingHandle(.begin(cancelled))
     await fixture.backend.testingHandle(.append(id: cancelled.id, sequence: 0, audio: Data([1])))
     await fixture.backend.testingHandle(.cancel(id: cancelled.id))
+    let recovering = try await fixture.next()
+    XCTAssertEqual(
+      recovering,
+      .readiness(
+        epoch: fixture.epoch,
+        state: .recovering(message: "Reconnecting after cancelled dictation.")
+      )
+    )
 
     let replacement = fixture.invocation(1)
     await fixture.backend.testingHandle(.begin(replacement))
     await fixture.backend.testingHandle(.append(id: replacement.id, sequence: 0, audio: Data([2])))
-    await fixture.backend.testingReceive(.transcriptDelta(itemID: "cancelled-item", delta: "Stale"))
+    await fixture.backend.testingReceive(
+      .transcriptDelta(itemID: "cancelled-item", delta: "Stale"),
+      attemptID: "test-attempt"
+    )
+    await fixture.backend.testingSetReady(epoch: fixture.epoch, attemptID: "replacement-attempt")
+    let ready = try await fixture.next()
+    XCTAssertEqual(
+      ready,
+      .readiness(epoch: fixture.epoch, state: .ready)
+    )
     await fixture.backend.testingReceive(.transcriptDelta(itemID: "replacement-item", delta: "Fresh"))
+    let preview = try await fixture.next()
+    XCTAssertEqual(preview, .preview(id: replacement.id, text: "Fresh"))
+
     await fixture.backend.testingHandle(.finish(id: replacement.id))
     await fixture.backend.testingReceive(.inputCommitted(itemID: "replacement-item"))
     await fixture.backend.testingReceive(
       .transcriptCompleted(itemID: "replacement-item", transcript: "Fresh final")
     )
 
-    let preview = try await fixture.next()
     let final = try await fixture.next()
-    XCTAssertEqual(preview, .preview(id: replacement.id, text: "Fresh"))
     XCTAssertEqual(
       final,
       .final(id: replacement.id, result: .init(text: "Fresh final", correction: .disabled))
@@ -217,32 +212,48 @@ final class OpenAITranscriptionBackendTests: XCTestCase {
     await fixture.backend.testingHandle(.begin(cancelled))
     await fixture.backend.testingHandle(.append(id: cancelled.id, sequence: 0, audio: Data([2])))
     await fixture.backend.testingHandle(.cancel(id: cancelled.id))
+    let clearedOldPreview = try await fixture.next()
+    let recovering = try await fixture.next()
+    XCTAssertEqual(clearedOldPreview, .preview(id: old.id, text: ""))
+    XCTAssertEqual(
+      recovering,
+      .readiness(
+        epoch: fixture.epoch,
+        state: .recovering(message: "Reconnecting after cancelled dictation.")
+      )
+    )
     let replacement = fixture.invocation(2)
     await fixture.backend.testingHandle(.begin(replacement))
     await fixture.backend.testingHandle(.append(id: replacement.id, sequence: 0, audio: Data([3])))
-    await fixture.backend.testingReceive(.transcriptDelta(itemID: "cancelled-item", delta: "Stale"))
-    await fixture.backend.testingReceive(.transcriptDelta(itemID: "old-item", delta: "Old"))
-    await fixture.backend.testingReceive(.inputCommitted(itemID: "old-item"))
     await fixture.backend.testingReceive(
-      .transcriptCompleted(itemID: "old-item", transcript: "Old final")
+      .transcriptDelta(itemID: "cancelled-item", delta: "Stale"),
+      attemptID: "test-attempt"
+    )
+    await fixture.backend.testingSetReady(epoch: fixture.epoch, attemptID: "replacement-attempt")
+    let ready = try await fixture.next()
+    XCTAssertEqual(
+      ready,
+      .readiness(epoch: fixture.epoch, state: .ready)
     )
     await fixture.backend.testingReceive(.transcriptDelta(itemID: "replacement-item", delta: "Fresh"))
+    await fixture.backend.testingReceive(.inputCommitted(itemID: "replayed-old-item"))
+    await fixture.backend.testingReceive(
+      .transcriptCompleted(itemID: "replayed-old-item", transcript: "Old final")
+    )
     await fixture.backend.testingHandle(.finish(id: replacement.id))
     await fixture.backend.testingReceive(.inputCommitted(itemID: "replacement-item"))
     await fixture.backend.testingReceive(
       .transcriptCompleted(itemID: "replacement-item", transcript: "Fresh final")
     )
 
-    let oldPreview = try await fixture.next()
-    let oldFinal = try await fixture.next()
     let replacementPreview = try await fixture.next()
+    let oldFinal = try await fixture.next()
     let replacementFinal = try await fixture.next()
-    XCTAssertEqual(oldPreview, .preview(id: old.id, text: "Old"))
+    XCTAssertEqual(replacementPreview, .preview(id: replacement.id, text: "Fresh"))
     XCTAssertEqual(
       oldFinal,
       .final(id: old.id, result: .init(text: "Old final", correction: .disabled))
     )
-    XCTAssertEqual(replacementPreview, .preview(id: replacement.id, text: "Fresh"))
     XCTAssertEqual(
       replacementFinal,
       .final(id: replacement.id, result: .init(text: "Fresh final", correction: .disabled))
@@ -353,6 +364,14 @@ final class OpenAITranscriptionBackendTests: XCTestCase {
     await fixture.backend.testingReceive(.transcriptDelta(itemID: "failed-item", delta: "Stale"))
     await fixture.backend.testingHandle(.finish(id: failed.id))
     await fixture.backend.testingReceive(.inputCommitted(itemID: "old-item"))
+    await fixture.backend.testingReceive(
+      .transcriptCompleted(itemID: "old-item", transcript: "Old final")
+    )
+    let oldFinal = try await fixture.next()
+    XCTAssertEqual(
+      oldFinal,
+      .final(id: old.id, result: .init(text: "Old final", correction: .disabled))
+    )
     let maybeEventID = await fixture.backend.testingCommitEventID(for: failed.id)
     let eventID = try XCTUnwrap(maybeEventID)
     await fixture.backend.testingReceive(.error(message: "Commit failed", eventID: eventID))
@@ -360,25 +379,39 @@ final class OpenAITranscriptionBackendTests: XCTestCase {
       return XCTFail("Expected the failed invocation to retire")
     }
     XCTAssertEqual(failedID, failed.id)
+    let recovering = try await fixture.next()
+    XCTAssertEqual(
+      recovering,
+      .readiness(
+        epoch: fixture.epoch,
+        state: .recovering(message: "Reconnecting after a transcription error.")
+      )
+    )
 
-    let committed = fixture.invocation(2)
-    await fixture.backend.testingHandle(.begin(committed))
-    await fixture.backend.testingHandle(.append(id: committed.id, sequence: 0, audio: Data([3])))
-    await fixture.backend.testingHandle(.finish(id: committed.id))
-    let active = fixture.invocation(3)
+    let active = fixture.invocation(2)
     await fixture.backend.testingHandle(.begin(active))
-    await fixture.backend.testingHandle(.append(id: active.id, sequence: 0, audio: Data([4])))
-    await fixture.backend.testingReceive(.inputCommitted(itemID: "committed-item"))
+    await fixture.backend.testingHandle(.append(id: active.id, sequence: 0, audio: Data([3])))
+    await fixture.backend.testingReceive(
+      .transcriptDelta(itemID: "failed-item", delta: " stale"),
+      attemptID: "test-attempt"
+    )
+    await fixture.backend.testingSetReady(epoch: fixture.epoch, attemptID: "replacement-attempt")
+    let ready = try await fixture.next()
+    XCTAssertEqual(
+      ready,
+      .readiness(epoch: fixture.epoch, state: .ready)
+    )
     await fixture.backend.testingReceive(.transcriptDelta(itemID: "active-item", delta: "Fresh"))
+    let activePreview = try await fixture.next()
+    XCTAssertEqual(activePreview, .preview(id: active.id, text: "Fresh"))
+
     await fixture.backend.testingHandle(.finish(id: active.id))
     await fixture.backend.testingReceive(.inputCommitted(itemID: "active-item"))
     await fixture.backend.testingReceive(
       .transcriptCompleted(itemID: "active-item", transcript: "Fresh final")
     )
 
-    let activePreview = try await fixture.next()
     let activeFinal = try await fixture.next()
-    XCTAssertEqual(activePreview, .preview(id: active.id, text: "Fresh"))
     XCTAssertEqual(
       activeFinal,
       .final(id: active.id, result: .init(text: "Fresh final", correction: .disabled))
@@ -400,11 +433,22 @@ final class OpenAITranscriptionBackendTests: XCTestCase {
     }
     XCTAssertEqual(failedID, rejected.id)
     XCTAssertEqual(failure.message, "Empty buffer")
+    let recovering = try await fixture.next()
+    XCTAssertEqual(
+      recovering,
+      .readiness(
+        epoch: fixture.epoch,
+        state: .recovering(message: "Reconnecting after a transcription error.")
+      )
+    )
 
     let next = fixture.invocation(1)
     await fixture.backend.testingHandle(.begin(next))
     await fixture.backend.testingHandle(.append(id: next.id, sequence: 0, audio: Data([2])))
     await fixture.backend.testingHandle(.finish(id: next.id))
+    await fixture.backend.testingSetReady(epoch: fixture.epoch, attemptID: "replacement-attempt")
+    let ready = try await fixture.next()
+    XCTAssertEqual(ready, .readiness(epoch: fixture.epoch, state: .ready))
     await fixture.backend.testingReceive(.inputCommitted(itemID: "next-item"))
     await fixture.backend.testingReceive(.transcriptCompleted(itemID: "next-item", transcript: "Recovered"))
     let event = try await fixture.next()
@@ -574,6 +618,7 @@ private struct Fixture: Sendable {
     let backend = OpenAITranscriptionBackend(
       apiKey: "test-key",
       configuration: .init(languages: [], prompt: "", keywords: [], delay: .low),
+      reconnectPolicy: .init(initialDelay: .seconds(60)),
       outboundCapacity: outboundCapacity,
       consumesOutboundActions: consumesOutboundActions
     )

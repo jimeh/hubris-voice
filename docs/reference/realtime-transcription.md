@@ -132,9 +132,15 @@ older commit awaits its item ID, the adapter keeps unknown pre-commit deltas in 
 bounded item-ID buffer. An acknowledgement binds and flushes only its exact item;
 if the buffer has not overflowed, the sole remaining item may then bind to the
 active input. Overflow disables inferred binding until reconnect and drops live
-preview text, while the completed transcript remains authoritative. An acknowledgement for a cancelled commit fences its
-exact item ID, and reconnect clears all attempt-local correlation. If an input
-that sent audio is cancelled or retired before its provider item is known,
+preview text, while the completed transcript remains authoritative. An
+acknowledgement for a cancelled commit fences its exact item ID, and reconnect
+clears all attempt-local correlation. If an input that sent audio is cancelled
+or retired before its provider item is known,
 inferred item binding stays disabled for the rest of that transport attempt.
-Exact acknowledgement matching and final transcripts continue, but unmatched
-previews remain buffered or are dropped at the bounds.
+The adapter then replaces the transport attempt, rejects late events bearing the
+old attempt ID, and replays each surviving invocation separately. Exact
+acknowledgement matching and final transcripts resume for the replayed items on
+the new attempt. Until that boundary, unmatched previews remain buffered or are
+dropped at the bounds. The new attempt restores live preview inference; this
+does not assume that a buffer-clear event orders earlier asynchronous
+transcription work.

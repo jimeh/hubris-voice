@@ -80,8 +80,8 @@ final class OpenAITranscriptionBackend: TranscriptionEngineRuntime, @unchecked S
     await state.shutdown()
   }
 
-  func testingSetReady(epoch: TranscriptionBackendEpoch) async {
-    await state.testingSetReady(epoch: epoch)
+  func testingSetReady(epoch: TranscriptionBackendEpoch, attemptID: String = "test-attempt") async {
+    await state.testingSetReady(epoch: epoch, attemptID: attemptID)
   }
 
   func testingHandle(_ command: TranscriptionEngineCommand) async {
@@ -90,6 +90,10 @@ final class OpenAITranscriptionBackend: TranscriptionEngineRuntime, @unchecked S
 
   func testingReceive(_ event: RealtimeServerEvent) async {
     await state.testingReceive(event)
+  }
+
+  func testingReceive(_ event: RealtimeServerEvent, attemptID: String) async {
+    await state.testingReceive(event, attemptID: attemptID)
   }
 
   func testingCommitEventID(for id: TranscriptionInvocationID) async -> String? {
@@ -283,10 +287,11 @@ private actor OpenAITranscriptionState {
     configurationContinuation.finish()
   }
 
-  func testingSetReady(epoch: TranscriptionBackendEpoch) async {
+  func testingSetReady(epoch: TranscriptionBackendEpoch, attemptID: String) async {
     guard !isShutdown else { return }
+    reconnectTask?.cancel()
+    reconnectTask = nil
     self.epoch = epoch
-    let attemptID = "test-attempt"
     activeAttemptID = attemptID
     client.outbound.setAttempt(attemptID)
     await client.beginAttempt(attemptID)
@@ -299,6 +304,11 @@ private actor OpenAITranscriptionState {
     guard !isShutdown else { return }
     guard let activeAttemptID else { return }
     await handle(.init(attemptID: activeAttemptID, payload: .server(event)))
+  }
+
+  func testingReceive(_ event: RealtimeServerEvent, attemptID: String) async {
+    guard !isShutdown else { return }
+    await handle(.init(attemptID: attemptID, payload: .server(event)))
   }
 
   func testingCommitEventID(for id: TranscriptionInvocationID) -> String? {
@@ -338,7 +348,7 @@ private actor OpenAITranscriptionState {
   private func append(id: TranscriptionInvocationID, sequence: Int, audio: Data) async {
     guard var invocation = invocations[id], !invocation.isCancelled, !invocation.isFinished else { return }
     guard sequence == invocation.nextSequence else {
-      retire(id)
+      let requiresFreshAttempt = retire(id)
       eventContinuation.yield(.failure(
         epoch: epoch,
         id: id,
@@ -348,6 +358,9 @@ private actor OpenAITranscriptionState {
           isRecoverable: false
         )
       ))
+      if requiresFreshAttempt {
+        await restartConnection(message: "Reconnecting after an audio capture error.")
+      }
       return
     }
     invocation.nextSequence += 1
@@ -377,22 +390,26 @@ private actor OpenAITranscriptionState {
   private func cancel(id: TranscriptionInvocationID) async {
     guard var invocation = invocations[id], !invocation.isCancelled else { return }
     invocation.isCancelled = true
-    suppressUnknownItemInference(for: invocation)
+    let requiresFreshAttempt = suppressUnknownItemInference(for: invocation)
     invocation.chunks.removeAll(keepingCapacity: false)
     if let itemID = invocation.itemID {
       retiredItemIDs.insert(itemID)
     }
     invocations[id] = invocation
     if activeInputID == id {
-      if isReady {
+      if isReady, !requiresFreshAttempt {
         if !client.outbound.clearAudio() {
           await retireConnectionAfterOutboundFailure()
+          return
         }
       }
       activeInputID = nil
     }
     if !awaitingCommits.contains(where: { $0.id == id }) {
       invocations.removeValue(forKey: id)
+    }
+    if requiresFreshAttempt {
+      await restartConnection(message: "Reconnecting after cancelled dictation.")
     }
   }
 
@@ -427,7 +444,7 @@ private actor OpenAITranscriptionState {
     activeAttemptID = nil
     transportTask = nil
     isReady = false
-    scheduleReconnect(message: message)
+    scheduleReconnect(message: "Reconnecting…")
   }
 
   private func handle(_ event: RealtimeTransportEvent) async {
@@ -451,29 +468,20 @@ private actor OpenAITranscriptionState {
     case .server(.transcriptCompleted(let itemID, let transcript)):
       receiveCompletion(itemID: itemID, transcript: transcript)
     case .server(.error(let message, let eventID)):
-      receiveError(message: message, eventID: eventID)
+      await receiveError(message: message, eventID: eventID)
     case .server(.ignored):
       break
-    case .connectionLost(let message):
-      guard let attemptID = activeAttemptID else { return }
-      activeAttemptID = nil
-      transportTask = nil
-      isReady = false
-      pendingConfigurationAcknowledgements = 0
-      resetWireCorrelationForReplay()
-      scheduleReconnect(message: message)
-      await client.disconnect()
-      client.outbound.setAttempt(nil)
-      _ = attemptID
+    case .connectionLost:
+      await restartConnection(message: "Reconnecting…")
     }
   }
 
-  private func scheduleReconnect(message _: String) {
+  private func scheduleReconnect(message: String) {
     guard !isShutdown else { return }
     attempt += 1
     eventContinuation.yield(.readiness(
       epoch: epoch,
-      state: .recovering(message: "Reconnecting…")
+      state: .recovering(message: message)
     ))
     reconnectTask?.cancel()
     let delay = reconnectPolicy.delay(forAttempt: attempt)
@@ -552,6 +560,10 @@ private actor OpenAITranscriptionState {
   }
 
   private func retireConnectionAfterOutboundFailure() async {
+    await restartConnection(message: "Reconnecting after an audio transport error.")
+  }
+
+  private func restartConnection(message: String) async {
     guard !isShutdown else { return }
     reconnectTask?.cancel()
     reconnectTask = nil
@@ -563,7 +575,8 @@ private actor OpenAITranscriptionState {
     resetWireCorrelationForReplay()
     client.outbound.setAttempt(nil)
     await client.disconnect()
-    scheduleReconnect(message: "Outbound transcription queue full")
+    guard !isShutdown else { return }
+    scheduleReconnect(message: message)
   }
 
   private func acknowledgeCommit(itemID: String) {
@@ -668,7 +681,7 @@ private actor OpenAITranscriptionState {
     ))
   }
 
-  private func receiveError(message: String, eventID: String?) {
+  private func receiveError(message: String, eventID: String?) async {
     if let eventID, let index = awaitingCommits.firstIndex(where: { $0.eventID == eventID }) {
       let commit = awaitingCommits.remove(at: index)
       guard let invocation = invocations[commit.id] else { return }
@@ -676,12 +689,15 @@ private actor OpenAITranscriptionState {
         invocations.removeValue(forKey: commit.id)
         return
       }
-      retire(commit.id)
+      let requiresFreshAttempt = retire(commit.id)
       eventContinuation.yield(.failure(
         epoch: epoch,
         id: commit.id,
         failure: .init(kind: .transcription, message: message, isRecoverable: false)
       ))
+      if requiresFreshAttempt {
+        await restartConnection(message: "Reconnecting after a transcription error.")
+      }
       return
     }
     if pendingConfigurationAcknowledgements > 0 {
@@ -720,26 +736,29 @@ private actor OpenAITranscriptionState {
     }
   }
 
+  @discardableResult
   private func retire(
     _ id: TranscriptionInvocationID,
     suppressUnassignedItemInference: Bool = true
-  ) {
-    guard let invocation = invocations.removeValue(forKey: id) else { return }
-    if suppressUnassignedItemInference {
-      suppressUnknownItemInference(for: invocation)
-    }
+  ) -> Bool {
+    guard let invocation = invocations.removeValue(forKey: id) else { return false }
+    let requiresFreshAttempt = suppressUnassignedItemInference
+      ? suppressUnknownItemInference(for: invocation)
+      : false
     if let itemID = invocation.itemID {
       retiredItemIDs.insert(itemID)
     }
     if activeInputID == id {
       activeInputID = nil
     }
+    return requiresFreshAttempt
   }
 
-  private func suppressUnknownItemInference(for invocation: Invocation) {
-    if invocation.itemID == nil, invocation.hasAudio {
-      isUnknownItemInferenceSuppressed = true
-    }
+  @discardableResult
+  private func suppressUnknownItemInference(for invocation: Invocation) -> Bool {
+    guard invocation.itemID == nil, invocation.hasAudio else { return false }
+    isUnknownItemInferenceSuppressed = true
+    return isReady
   }
 
   private func completeEmptyInvocation(_ id: TranscriptionInvocationID) {
