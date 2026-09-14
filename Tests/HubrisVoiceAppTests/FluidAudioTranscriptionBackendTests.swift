@@ -524,6 +524,53 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
     XCTAssertEqual(correctionReleaseCount, 2)
   }
 
+  func testRepreparationBlocksNewInvocationUntilReady() async throws {
+    let processor = FakeFluidAudioProcessor(
+      final: FluidAudioProcessResult(rawText: "unused", candidateText: nil)
+    )
+    let eventPair = AsyncStream.makeStream(of: TranscriptionEngineEvent.self)
+    let state = FluidAudioTranscriptionState(
+      context: .init(permanentEntries: []),
+      correctionPolicy: .disabled,
+      processor: processor,
+      acquireModels: { _, _ in
+        FluidAudioModelLease(
+          primaryDirectory: URL(fileURLWithPath: "/owned/primary"),
+          release: {}
+        )
+      },
+      acquireCorrection: { nil },
+      events: eventPair.continuation
+    )
+    let recorder = EventRecorder(stream: eventPair.stream)
+    let initialEpoch = TranscriptionBackendEpoch(9)
+    let replacementEpoch = TranscriptionBackendEpoch(10)
+
+    await state.handle(.prepare(epoch: initialEpoch))
+    _ = try await recorder.waitUntil {
+      if case .readiness(initialEpoch, .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+    await processor.blockNextPrepare()
+    await state.handle(.prepare(epoch: replacementEpoch))
+    try await processor.waitForPrepareCount(2)
+
+    await state.handle(.begin(TranscriptionInvocation(
+      id: TranscriptionInvocationID(epoch: replacementEpoch, generation: 1),
+      format: .local
+    )))
+    let unloadTask = Task { await state.unload() }
+    try await processor.waitForPrepareCancellation()
+    await processor.releasePrepare()
+    await unloadTask.value
+
+    let resetCount = await processor.resetCount()
+    XCTAssertEqual(resetCount, 0)
+  }
+
   func testIdleConfigurationUpdateKeepsPrimaryLoadedAndAppliesToNextInvocation() async throws {
     let processor = FakeFluidAudioProcessor(
       final: FluidAudioProcessResult(

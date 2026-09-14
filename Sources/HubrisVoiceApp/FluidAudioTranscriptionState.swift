@@ -102,6 +102,7 @@ actor FluidAudioTranscriptionState {
     preparationGeneration &+= 1
     let generation = preparationGeneration
     self.epoch = epoch
+    isPrepared = false
     events.yield(.readiness(epoch: epoch, state: .preparing(message: "Loading local model…")))
     preparationTask?.cancel()
     let pendingReconfiguration = reconfigurationTask
