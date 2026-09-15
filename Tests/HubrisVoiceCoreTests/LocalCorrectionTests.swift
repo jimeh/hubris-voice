@@ -2,6 +2,60 @@
 import XCTest
 
 final class LocalCorrectionTests: XCTestCase {
+  func testAppliesGeneratedAccessibilityIdentifierAliases() {
+    let context = LocalInvocationContext(permanentEntries: [
+      LocalVocabularyEntry(canonicalText: "AXValue"),
+      LocalVocabularyEntry(canonicalText: "AXVisibleCharacterRange"),
+    ])
+
+    let result = LocalTranscriptCorrection.applyAliases(
+      to: "AX value and AX visible character range",
+      context: context,
+      policy: .strict
+    )
+
+    XCTAssertEqual(result.text, "AXValue and AXVisibleCharacterRange")
+    XCTAssertEqual(result.outcome, .applied)
+  }
+
+  func testAppliesGeneratedSourceFilenameAlias() {
+    let context = LocalInvocationContext(permanentEntries: [
+      LocalVocabularyEntry(canonicalText: "AppModel.swift"),
+    ])
+
+    let dottedResult = LocalTranscriptCorrection.applyAliases(
+      to: "Open app model.swift",
+      context: context,
+      policy: .strict
+    )
+    let spokenDotResult = LocalTranscriptCorrection.applyAliases(
+      to: "Open app model dot swift",
+      context: context,
+      policy: .strict
+    )
+
+    XCTAssertEqual(dottedResult.text, "Open AppModel.swift")
+    XCTAssertEqual(dottedResult.outcome, .applied)
+    XCTAssertEqual(spokenDotResult.text, "Open AppModel.swift")
+    XCTAssertEqual(spokenDotResult.outcome, .applied)
+  }
+
+  func testCanonicalizesCaseOnlyIdentifierAndFilenameMatches() {
+    let context = LocalInvocationContext(permanentEntries: [
+      LocalVocabularyEntry(canonicalText: "AXValue"),
+      LocalVocabularyEntry(canonicalText: "AppModel.swift"),
+    ])
+
+    let result = LocalTranscriptCorrection.applyAliases(
+      to: "Use axvalue in appmodel.swift",
+      context: context,
+      policy: .strict
+    )
+
+    XCTAssertEqual(result.text, "Use AXValue in AppModel.swift")
+    XCTAssertEqual(result.outcome, .applied)
+  }
+
   func testStrictPolicyMatchesTestedTuning() throws {
     let configuration = try XCTUnwrap(LocalCorrectionPolicy.strict.configuration)
 

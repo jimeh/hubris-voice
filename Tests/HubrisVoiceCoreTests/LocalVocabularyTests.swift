@@ -11,6 +11,18 @@ final class LocalVocabularyTests: XCTestCase {
       LocalVocabularyEntry(canonicalText: "user_id").generatedAliases,
       ["user id", "user underscore id"]
     )
+    XCTAssertEqual(
+      LocalVocabularyEntry(canonicalText: "AXValue").generatedAliases,
+      ["A X Value", "AX Value"]
+    )
+    XCTAssertEqual(
+      LocalVocabularyEntry(canonicalText: "AXVisibleCharacterRange").generatedAliases,
+      ["A X Visible Character Range", "AX Visible Character Range"]
+    )
+    XCTAssertEqual(
+      LocalVocabularyEntry(canonicalText: "AppModel.swift").generatedAliases,
+      ["App Model dot swift", "App Model.swift"]
+    )
   }
 
   func testInvocationContextKeepsPermanentAndEphemeralEntriesSeparate() {

@@ -19,7 +19,9 @@ struct PasteResult {
 final class TextInsertionService {
   private let clipboard = ClipboardInsertionTransaction(pasteboard: .general)
 
-  func captureFocusedTarget() -> CapturedFocus? {
+  func captureFocusedTarget(
+    allowManualAccessibility: Bool = true
+  ) -> CapturedFocus? {
     guard
       let application = NSWorkspace.shared.frontmostApplication
     else {
@@ -32,7 +34,7 @@ final class TextInsertionService {
       attribute: kAXFocusedUIElementAttribute,
       from: applicationElement
     )
-    if focusedElement == nil {
+    if focusedElement == nil, allowManualAccessibility {
       AXUIElementSetAttributeValue(
         applicationElement,
         "AXManualAccessibility" as CFString,

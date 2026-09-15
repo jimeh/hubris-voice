@@ -244,7 +244,7 @@ description = "Build and sign a debug app with development diagnostics support"
 run = "./Scripts/bundle.sh debug"
 
 [tasks."dev:trace"]
-description = "Launch the debug app with raw insertion tracing (quit the app first)"
+description = "Launch the debug app with raw transcription and window-context tracing (quit first)"
 depends = ["bundle:debug"]
 run = "open '.build/artifacts/Hubris Voice.app' --args --development-trace"
 

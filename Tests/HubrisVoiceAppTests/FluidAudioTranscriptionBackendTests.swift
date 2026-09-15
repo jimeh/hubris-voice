@@ -79,6 +79,50 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
     XCTAssertTrue(events.contains(.preview(id: invocation.id, text: "raw preview")))
   }
 
+  func testTraceRecordsRawCandidateAndGuardDecisions() async throws {
+    let processor = FakeFluidAudioProcessor(
+      final: FluidAudioProcessResult(
+        rawText: "Use user underscore ID, please.",
+        candidateText: "Use user_id please"
+      )
+    )
+    let trace = TraceRecorder()
+    let backend = makeBackend(
+      processor: processor,
+      policy: .strict,
+      trace: trace.record
+    )
+    let recorder = EventRecorder(stream: backend.events)
+    let invocation = makeInvocation(generation: 12)
+
+    XCTAssertTrue(backend.submit(.prepare(epoch: invocation.id.epoch)))
+    _ = try await recorder.waitUntil {
+      if case .readiness(_, .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+    XCTAssertTrue(backend.submit(.begin(invocation)))
+    XCTAssertTrue(backend.submit(.finish(id: invocation.id)))
+    _ = try await recorder.waitUntil {
+      if case .final(id: invocation.id, _) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+
+    let messages = trace.snapshot()
+    XCTAssertEqual(messages.count, 1)
+    XCTAssertTrue(messages[0].contains("generation=12"))
+    XCTAssertTrue(messages[0].contains("raw=\"Use user underscore ID, please.\""))
+    XCTAssertTrue(messages[0].contains("candidate=Optional(\"Use user_id please\")"))
+    XCTAssertTrue(messages[0].contains("outcome=applied"))
+    XCTAssertTrue(messages[0].contains("reason=canonicalSubstitution"))
+    XCTAssertTrue(messages[0].contains("final=\"Use user_id, please.\""))
+  }
+
   func testCancellationRetiresFinalizingInvocationAndReplaysNextBufferedAudio() async throws {
     let processor = FakeFluidAudioProcessor(
       final: FluidAudioProcessResult(rawText: "second result", candidateText: nil),
@@ -283,6 +327,226 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
 
     let appendedChunks = await processor.appendedChunks()
     XCTAssertEqual(appendedChunks, [])
+  }
+
+  func testFourQueuedInvocationsKeepDistinctContextsAndRejectLateUpdate() async throws {
+    let processor = FakeFluidAudioProcessor(
+      final: FluidAudioProcessResult(rawText: "result", candidateText: nil),
+      blockFinish: true
+    )
+    let backend = makeBackend(
+      processor: processor,
+      policy: .strict,
+      context: LocalInvocationContext(permanentEntries: [])
+    )
+    let recorder = EventRecorder(stream: backend.events)
+    let invocations = (30 ..< 34).map { makeInvocation(generation: $0) }
+
+    XCTAssertTrue(backend.submit(.prepare(epoch: invocations[0].id.epoch)))
+    _ = try await recorder.waitUntil {
+      if case .readiness(_, .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+
+    for (index, invocation) in invocations.enumerated() {
+      XCTAssertTrue(backend.submit(.begin(invocation)))
+      let accepted = await backend.updateInvocationContext(
+        id: invocation.id,
+        context: LocalInvocationContext(
+          permanentEntries: [],
+          ephemeralEntries: [LocalVocabularyEntry(canonicalText: "Context\(index)")]
+        )
+      )
+      XCTAssertTrue(accepted)
+      XCTAssertTrue(backend.submit(.finish(id: invocation.id)))
+    }
+    try await processor.waitForFinish()
+
+    let lateUpdate = await backend.updateInvocationContext(
+      id: invocations[1].id,
+      context: LocalInvocationContext(
+        permanentEntries: [],
+        ephemeralEntries: [LocalVocabularyEntry(canonicalText: "TooLate")]
+      )
+    )
+    XCTAssertFalse(lateUpdate)
+
+    await processor.releaseFinish()
+    for invocation in invocations {
+      _ = try await recorder.waitUntil {
+        if case .final(id: invocation.id, _) = $0 {
+          true
+        } else {
+          false
+        }
+      }
+    }
+
+    let preparedEphemeralTerms = await processor.preparedContexts()
+      .compactMap { $0.ephemeralEntries.first?.canonicalText }
+    XCTAssertEqual(preparedEphemeralTerms, ["Context0", "Context1", "Context2", "Context3"])
+  }
+
+  func testEphemeralReadinessAcquiresCorrectionWithEmptyPermanentDictionary() async throws {
+    let processor = FakeFluidAudioProcessor(
+      final: FluidAudioProcessResult(rawText: "result", candidateText: nil)
+    )
+    let correctionAcquisitions = Counter()
+    let backend = FluidAudioTranscriptionBackend(
+      context: LocalInvocationContext(permanentEntries: []),
+      correctionPolicy: .strict,
+      allowsEphemeralContext: true,
+      processor: processor,
+      acquireModels: { _, _ in
+        FluidAudioModelLease(primaryDirectory: URL(fileURLWithPath: "/owned/primary"), release: {})
+      },
+      acquireCorrection: {
+        await correctionAcquisitions.increment()
+        return FluidAudioCorrectionLease(directory: URL(fileURLWithPath: "/owned/ctc"), release: {})
+      }
+    )
+    let recorder = EventRecorder(stream: backend.events)
+    let invocation = makeInvocation(generation: 34)
+
+    XCTAssertTrue(backend.submit(.prepare(epoch: invocation.id.epoch)))
+    _ = try await recorder.waitUntil {
+      if case .readiness(_, .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+
+    let acquisitionCount = await correctionAcquisitions.value()
+    let correctionDirectory = await processor.latestCorrectionDirectory()
+    XCTAssertEqual(acquisitionCount, 1)
+    XCTAssertEqual(correctionDirectory, URL(fileURLWithPath: "/owned/ctc"))
+    XCTAssertTrue(backend.submit(.begin(invocation)))
+    let accepted = await backend.updateInvocationContext(
+      id: invocation.id,
+      context: LocalInvocationContext(
+        permanentEntries: [],
+        ephemeralEntries: [LocalVocabularyEntry(canonicalText: "FirstEphemeral")]
+      )
+    )
+    XCTAssertTrue(accepted)
+    XCTAssertTrue(backend.submit(.finish(id: invocation.id)))
+    _ = try await recorder.waitUntil {
+      if case .final(id: invocation.id, _) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+
+    let ephemeralContexts = await processor.preparedContexts().filter { !$0.ephemeralEntries.isEmpty }
+    XCTAssertEqual(ephemeralContexts.last?.ephemeralEntries.first?.canonicalText, "FirstEphemeral")
+    let primaryLoadCount = await processor.primaryLoadCount()
+    XCTAssertEqual(primaryLoadCount, 1)
+  }
+
+  func testQueuedContextInvalidationRunsBeforeFinish() async throws {
+    let processor = FakeFluidAudioProcessor(
+      final: FluidAudioProcessResult(rawText: "result", candidateText: nil)
+    )
+    let backend = makeBackend(
+      processor: processor,
+      policy: .strict,
+      context: LocalInvocationContext(permanentEntries: [])
+    )
+    let recorder = EventRecorder(stream: backend.events)
+    let invocation = makeInvocation(generation: 35)
+
+    XCTAssertTrue(backend.submit(.prepare(epoch: invocation.id.epoch)))
+    _ = try await recorder.waitUntil {
+      if case .readiness(_, .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+    XCTAssertTrue(backend.submit(.begin(invocation)))
+    let accepted = await backend.updateInvocationContext(
+      id: invocation.id,
+      context: LocalInvocationContext(
+        permanentEntries: [],
+        ephemeralEntries: [LocalVocabularyEntry(canonicalText: "DiscardMe")]
+      )
+    )
+    XCTAssertTrue(accepted)
+    XCTAssertTrue(backend.submitInvocationContextUpdate(
+      id: invocation.id,
+      context: LocalInvocationContext(permanentEntries: [])
+    ))
+    XCTAssertTrue(backend.submit(.finish(id: invocation.id)))
+    _ = try await recorder.waitUntil {
+      if case .final(id: invocation.id, _) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+
+    let preparedContexts = await processor.preparedContexts()
+    XCTAssertEqual(preparedContexts.last?.ephemeralEntries, [])
+  }
+
+  func testInvocationContextIsRejectedAfterCancellationEpochReplacementAndUnload() async throws {
+    let processor = FakeFluidAudioProcessor(
+      final: FluidAudioProcessResult(rawText: "unused", candidateText: nil)
+    )
+    let backend = makeBackend(processor: processor, policy: .disabled)
+    let recorder = EventRecorder(stream: backend.events)
+    let cancelled = makeInvocation(generation: 35)
+    let replaced = makeInvocation(generation: 36)
+    let context = LocalInvocationContext(
+      permanentEntries: [],
+      ephemeralEntries: [LocalVocabularyEntry(canonicalText: "Ephemeral")]
+    )
+
+    XCTAssertTrue(backend.submit(.prepare(epoch: cancelled.id.epoch)))
+    _ = try await recorder.waitUntil {
+      if case .readiness(_, .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+    XCTAssertTrue(backend.submit(.begin(cancelled)))
+    var accepted = await backend.updateInvocationContext(id: cancelled.id, context: context)
+    XCTAssertTrue(accepted)
+    XCTAssertTrue(backend.submit(.cancel(id: cancelled.id)))
+    accepted = await backend.updateInvocationContext(id: cancelled.id, context: context)
+    XCTAssertFalse(accepted)
+
+    XCTAssertTrue(backend.submit(.begin(replaced)))
+    accepted = await backend.updateInvocationContext(id: replaced.id, context: context)
+    XCTAssertTrue(accepted)
+    let replacementEpoch = TranscriptionBackendEpoch(replaced.id.epoch.rawValue + 1)
+    XCTAssertTrue(backend.submit(.prepare(epoch: replacementEpoch)))
+    accepted = await backend.updateInvocationContext(id: replaced.id, context: context)
+    XCTAssertFalse(accepted)
+    _ = try await recorder.waitUntil {
+      if case .readiness(replacementEpoch, .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+
+    let unloaded = TranscriptionInvocation(
+      id: TranscriptionInvocationID(epoch: replacementEpoch, generation: 1),
+      format: .local
+    )
+    XCTAssertTrue(backend.submit(.begin(unloaded)))
+    accepted = await backend.updateInvocationContext(id: unloaded.id, context: context)
+    XCTAssertTrue(accepted)
+    await backend.unload()
+    accepted = await backend.updateInvocationContext(id: unloaded.id, context: context)
+    XCTAssertFalse(accepted)
   }
 
   func testRepeatedPreparationReleasesSupersededModelLeases() async throws {
@@ -1040,6 +1304,7 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
     policy: LocalCorrectionPolicy,
     release: @escaping @Sendable () async -> Void = {},
     correctionRelease: @escaping @Sendable () async -> Void = {},
+    trace: @escaping @Sendable (String) -> Void = { _ in },
     context: LocalInvocationContext = LocalInvocationContext(permanentEntries: [
       LocalVocabularyEntry(canonicalText: "user_id"),
     ])
@@ -1059,7 +1324,8 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
           directory: URL(fileURLWithPath: "/owned/ctc"),
           release: correctionRelease
         )
-      }
+      },
+      trace: trace
     )
   }
 
@@ -1068,6 +1334,21 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
       id: TranscriptionInvocationID(epoch: TranscriptionBackendEpoch(7), generation: generation),
       format: .local
     )
+  }
+}
+
+private final class TraceRecorder: @unchecked Sendable {
+  private let lock = NSLock()
+  private var messages: [String] = []
+
+  func record(_ message: String) {
+    lock.withLock {
+      messages.append(message)
+    }
+  }
+
+  func snapshot() -> [String] {
+    lock.withLock { messages }
   }
 }
 
@@ -1124,6 +1405,7 @@ private actor FakeFluidAudioProcessor: FluidAudioProcessing {
   private var preparations = 0
   private var primaryLoads = 0
   private var currentContext: LocalInvocationContext?
+  private var correctionContexts: [LocalInvocationContext] = []
   private var currentCorrectionDirectory: URL?
   private var resets = 0
   private var chunks: [Data] = []
@@ -1174,6 +1456,14 @@ private actor FakeFluidAudioProcessor: FluidAudioProcessing {
 
   func reset() throws {
     resets += 1
+  }
+
+  func updateCorrection(
+    context: LocalInvocationContext,
+    correctionPolicy _: LocalCorrectionPolicy
+  ) {
+    currentContext = context
+    correctionContexts.append(context)
   }
 
   func append(_ audio: Data) throws -> String {
@@ -1286,12 +1576,28 @@ private actor FakeFluidAudioProcessor: FluidAudioProcessing {
     currentContext
   }
 
+  func preparedContexts() -> [LocalInvocationContext] {
+    correctionContexts
+  }
+
   func latestCorrectionDirectory() -> URL? {
     currentCorrectionDirectory
   }
 
   func appendedChunks() -> [Data] {
     chunks
+  }
+}
+
+private actor Counter {
+  private var count = 0
+
+  func increment() {
+    count += 1
+  }
+
+  func value() -> Int {
+    count
   }
 }
 

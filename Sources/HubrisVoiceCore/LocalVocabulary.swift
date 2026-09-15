@@ -61,10 +61,13 @@ enum LocalVocabularyAliases {
       in: acronymSplit,
       template: "$1 $2"
     )
-    let baseForms = [
+    var baseForms = [
       camelSplit.replacingOccurrences(of: "_", with: " "),
       camelSplit.replacingOccurrences(of: "_", with: " underscore "),
     ]
+    if camelSplit.contains(".") {
+      baseForms.append(camelSplit.replacingOccurrences(of: ".", with: " dot "))
+    }
     var forms = Set(baseForms.map(normalizeWhitespace).filter(isMultiword))
     for form in Array(forms) {
       forms.insert(spellAcronyms(in: form))

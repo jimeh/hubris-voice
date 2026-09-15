@@ -25,6 +25,10 @@ final class LocalModelsController: ObservableObject {
     didSet { configurationChanged() }
   }
 
+  @Published var activeWindowContextEnabled: Bool {
+    didSet { configurationChanged() }
+  }
+
   @Published var entries: [LocalVocabularyEntry] {
     didSet {
       // Published assignments re-enter this observer, so rollback must bypass persistence.
@@ -92,6 +96,7 @@ final class LocalModelsController: ObservableObject {
     modelID = preferences.localModel
     engine = preferences.engine
     correctionEnabled = preferences.correctionEnabled
+    activeWindowContextEnabled = preferences.activeWindowContextEnabled
     do {
       entries = try LocalVocabularyStore.seedFromCloudIfNeeded(
         settings.stringArray(DictationSettings.Key.dictionary) ?? [], in: settings
@@ -198,8 +203,13 @@ final class LocalModelsController: ObservableObject {
   }
 
   private func configurationChanged() {
-    TranscriptionPreferences(engine: engine, localModel: modelID, correctionEnabled: correctionEnabled)
-      .save(to: settings)
+    TranscriptionPreferences(
+      engine: engine,
+      localModel: modelID,
+      correctionEnabled: correctionEnabled,
+      activeWindowContextEnabled: activeWindowContextEnabled
+    )
+    .save(to: settings)
     onConfigurationChanged?()
   }
 }

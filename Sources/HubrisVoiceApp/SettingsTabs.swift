@@ -327,6 +327,52 @@ struct AdvancedSettingsTab: View {
           Button("Show in Finder") { model.openDiagnosticLog() }
         }
       }
+      #if DEBUG
+        Section("Active window context inspection") {
+          SettingsRow(
+            title: "Next dictation",
+            caption: "Captured terms stay in memory and are not written to logs."
+          ) {
+            Button(model.windowContextInspectionArmed ? "Waiting…" : "Inspect") {
+              model.inspectNextWindowContextCapture()
+            }
+            .disabled(
+              model.windowContextInspectionArmed || !model.windowContextInspectionIsAvailable
+            )
+          }
+
+          if let inspection = model.windowContextInspection {
+            VStack(alignment: .leading, spacing: 8) {
+              Text("Selected terms (\(inspection.selectedTerms.count))")
+                .font(.headline)
+              Text(inspection.selectedTerms.joined(separator: "\n"))
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+
+              DisclosureGroup("All candidates (\(inspection.candidates.count))") {
+                ScrollView {
+                  Text(inspection.candidates.joined(separator: "\n"))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                }
+                .frame(maxHeight: 160)
+              }
+
+              Text(
+                "Visited \(inspection.diagnostics.visitedElements) elements, "
+                  + "collected \(inspection.diagnostics.collectedCharacters) characters. "
+                  + "Limits: elements \(inspection.diagnostics.reachedElementLimit), "
+                  + "depth \(inspection.diagnostics.reachedDepthLimit), "
+                  + "characters \(inspection.diagnostics.reachedCharacterLimit), "
+                  + "deadline \(inspection.diagnostics.reachedDeadline)."
+              )
+              .font(.caption)
+              .foregroundStyle(.secondary)
+            }
+          }
+        }
+      #endif
     }
     .formStyle(.grouped)
   }

@@ -8,6 +8,24 @@ import SwiftUI
 // The effect interpreter and its platform integrations are intentionally kept together.
 // swiftlint:disable file_length type_body_length
 
+private struct WindowContextState {
+  let permanentEntries: [LocalVocabularyEntry]
+  var target: AccessibilityWindowTarget?
+  var selectedContext: LocalInvocationContext?
+  var provisionalUpdateAccepted = false
+  var releaseStarted = false
+  var revalidationSucceeded = false
+  var frozen = false
+}
+
+#if DEBUG
+  struct WindowContextInspection {
+    let candidates: [String]
+    let selectedTerms: [String]
+    let diagnostics: WindowTextCollectionDiagnostics
+  }
+#endif
+
 @MainActor
 final class AppModel: ObservableObject {
   enum ConfigurationState: Equatable {
@@ -85,6 +103,10 @@ final class AppModel: ObservableObject {
   @Published var newDictionaryWord = ""
   @Published private(set) var settingsMessage: String?
   @Published private(set) var configurationState = ConfigurationState.applied
+  #if DEBUG
+    @Published private(set) var windowContextInspection: WindowContextInspection?
+    @Published private(set) var windowContextInspectionArmed = false
+  #endif
   @Published private(set) var microphonePermission: MicrophonePermission
   @Published private(set) var accessibilityTrusted: Bool
   @Published private(set) var inputMonitoring: Bool
@@ -245,6 +267,7 @@ final class AppModel: ObservableObject {
   private let audioCapture = AudioCapture()
   private let shortcutMonitor = ShortcutMonitor()
   private let insertionService = TextInsertionService()
+  private let windowTextCollector = AccessibilityWindowTextCollector()
   private let soundCues = SoundCues()
   private let keychain = KeychainStore()
   private let loginItemService = LoginItemService()
@@ -286,6 +309,9 @@ final class AppModel: ObservableObject {
   private var didWarnForFnBinding = false
   private var historyEntryIDs: [Int: UUID] = [:]
   private var presentedHistoryEntryID: UUID?
+  private var windowContextStates: [TranscriptionInvocationID: WindowContextState] = [:]
+  private var windowContextCaptureTasks: [TranscriptionInvocationID: Task<Void, Never>] = [:]
+  private var windowContextRevalidationTasks: [TranscriptionInvocationID: Task<Void, Never>] = [:]
 
   // swiftlint:disable:next function_body_length
   init(
@@ -315,7 +341,8 @@ final class AppModel: ObservableObject {
       let local = FluidAudioTranscriptionBackend(
         store: localModels.store,
         context: LocalInvocationContext(permanentEntries: localModels.entries),
-        correctionPolicy: localModels.correctionEnabled ? .strict : .disabled
+        correctionPolicy: localModels.correctionEnabled ? .strict : .disabled,
+        allowsEphemeralContext: localModels.activeWindowContextEnabled
       )
       localBackend = local
       runtime = local
@@ -396,7 +423,6 @@ final class AppModel: ObservableObject {
     }
     applyShortcutSet(settings.shortcuts)
     shortcutMonitor.isSuspended = !dictationEnabled
-    DevelopmentTrace.shared.localTranscriptionSelected = activeEngine == .fluidAudio
     localModels.onConfigurationChanged = { [weak self] in self?.requestEngineConfiguration() }
     localModels.onLoad = { [weak self] in self?.loadLocalModel() }
     localModels.onUnload = { [weak self] in await self?.unloadLocalModel() }
@@ -947,7 +973,7 @@ final class AppModel: ObservableObject {
         guard let self,
               session.pending.contains(where: { $0.id == invocationID })
         else { return }
-        submitEngineCommand(.finish(id: invocationID))
+        finishTranscriptionAfterContextFreeze(invocationID)
       }
     case .cancelTranscription(let invocationID): submitEngineCommand(.cancel(id: invocationID))
     case .scheduleFinalizingTimeout(let generation, let delay):
@@ -1163,7 +1189,11 @@ final class AppModel: ObservableObject {
 
   private func startCapture(invocation: TranscriptionInvocation) {
     let generation = invocation.id.generation
-    let capturedFocus = insertionService.captureFocusedTarget()
+    // Context collection must observe the app's existing AX tree rather than
+    // relying on the Electron insertion fallback to alter its runtime tree.
+    let capturedFocus = insertionService.captureFocusedTarget(
+      allowManualAccessibility: false
+    )
     currentAnchor = insertionService.captureAnchor(for: capturedFocus)
     buffers[generation] = AudioSnippetBuffer(sampleRate: invocation.format.sampleRate)
     audioSequences[generation] = 0
@@ -1172,6 +1202,7 @@ final class AppModel: ObservableObject {
     overlayModel.beginListening()
     do {
       try audioCapture.start(sampleRate: Double(invocation.format.sampleRate))
+      startWindowContextCollection(for: invocation)
     } catch {
       apply(.localError(message: error.localizedDescription))
     }
@@ -1180,6 +1211,12 @@ final class AppModel: ObservableObject {
   private func stopCaptureAfterGrace() {
     recordingStartedAt = nil
     guard let stoppingGeneration = streamingGeneration else { return }
+    if let invocationID = windowContextStates.keys.first(where: {
+      $0.generation == stoppingGeneration
+    }) {
+      windowContextStates[invocationID]?.releaseStarted = true
+      startWindowContextRevalidation(for: invocationID)
+    }
     captureFinalizer.schedule(generation: stoppingGeneration) { [weak self] in
       guard let self, streamingGeneration == stoppingGeneration else { return }
       audioCapture.stop()
@@ -1208,7 +1245,248 @@ final class AppModel: ObservableObject {
     releasedAt.removeValue(forKey: generation)
     historyEntryIDs.removeValue(forKey: generation)
     cancelFinalizingTimeout(generation: generation)
+    if let invocationID = windowContextStates.keys.first(where: {
+      $0.generation == generation
+    }) {
+      clearWindowContext(for: invocationID)
+    }
   }
+
+  private func startWindowContextCollection(
+    for invocation: TranscriptionInvocation
+  ) {
+    guard activeWindowContextIsAvailable else { return }
+    let invocationID = invocation.id
+    windowContextStates[invocationID] = WindowContextState(
+      permanentEntries: activeLocalEntries
+    )
+    windowContextCaptureTasks[invocationID] = Task { @MainActor [weak self] in
+      guard let self else { return }
+      let collection = await windowTextCollector.collectActiveWindow()
+      guard !Task.isCancelled, let collection else { return }
+      await receiveWindowTextCollection(collection, for: invocationID)
+    }
+  }
+
+  private func receiveWindowTextCollection(
+    _ collection: WindowTextCollection,
+    for invocationID: TranscriptionInvocationID
+  ) async {
+    defer { windowContextCaptureTasks.removeValue(forKey: invocationID) }
+    guard var state = windowContextStates[invocationID], !state.frozen else { return }
+
+    let candidates = ActiveWindowContextSelector.candidateTerms(in: collection.fragments)
+    let evidence = WindowTermClassifier().evidence(for: candidates)
+    let context = ActiveWindowContextSelector.selectContext(
+      from: collection.fragments,
+      permanentEntries: state.permanentEntries,
+      evidence: evidence
+    )
+    traceWindowContextSelection(
+      collection: collection,
+      candidates: candidates,
+      evidence: evidence,
+      context: context,
+      invocationID: invocationID
+    )
+    #if DEBUG
+      if windowContextInspectionArmed {
+        windowContextInspection = WindowContextInspection(
+          candidates: candidates,
+          selectedTerms: context.ephemeralEntries.map(\.canonicalText),
+          diagnostics: collection.diagnostics
+        )
+        windowContextInspectionArmed = false
+      }
+    #endif
+    let diagnosticMessage =
+      "window context visited=\(collection.diagnostics.visitedElements) "
+        + "characters=\(collection.diagnostics.collectedCharacters) "
+        + "selected=\(context.ephemeralEntries.count) "
+        + "elementLimit=\(collection.diagnostics.reachedElementLimit) "
+        + "depthLimit=\(collection.diagnostics.reachedDepthLimit) "
+        + "characterLimit=\(collection.diagnostics.reachedCharacterLimit) "
+        + "deadline=\(collection.diagnostics.reachedDeadline)"
+    Task { await DiagnosticLog.shared.record(diagnosticMessage) }
+    guard !context.ephemeralEntries.isEmpty else {
+      DevelopmentTrace.shared.record(
+        "window context update generation=\(invocationID.generation) skipped=no-selected-terms"
+      )
+      return
+    }
+
+    state.target = collection.target
+    state.selectedContext = context
+    windowContextStates[invocationID] = state
+    if state.releaseStarted {
+      startWindowContextRevalidation(for: invocationID)
+    }
+
+    guard !Task.isCancelled, let localBackend else {
+      DevelopmentTrace.shared.record(
+        "window context update generation=\(invocationID.generation) skipped=cancelled-or-no-backend"
+      )
+      return
+    }
+    let updateAccepted = await localBackend.updateInvocationContext(id: invocationID, context: context)
+    DevelopmentTrace.shared.record(
+      "window context update generation=\(invocationID.generation) accepted=\(updateAccepted)"
+    )
+    guard updateAccepted,
+          var current = windowContextStates[invocationID],
+          !current.frozen,
+          current.selectedContext == context
+    else { return }
+    current.provisionalUpdateAccepted = true
+    windowContextStates[invocationID] = current
+  }
+
+  private func startWindowContextRevalidation(
+    for invocationID: TranscriptionInvocationID
+  ) {
+    guard windowContextRevalidationTasks[invocationID] == nil,
+          let state = windowContextStates[invocationID],
+          state.releaseStarted,
+          !state.frozen,
+          let target = state.target
+    else { return }
+
+    windowContextRevalidationTasks[invocationID] = Task { @MainActor [weak self] in
+      guard let self else { return }
+      let valid = await windowTextCollector.revalidateActiveWindow(target)
+      DevelopmentTrace.shared.record(
+        "window context revalidation generation=\(invocationID.generation) valid=\(valid)"
+      )
+      defer { windowContextRevalidationTasks.removeValue(forKey: invocationID) }
+      guard !Task.isCancelled,
+            var current = windowContextStates[invocationID],
+            !current.frozen,
+            current.target == target
+      else { return }
+      current.revalidationSucceeded = valid
+      windowContextStates[invocationID] = current
+    }
+  }
+
+  private func finishTranscriptionAfterContextFreeze(
+    _ invocationID: TranscriptionInvocationID
+  ) {
+    guard var state = windowContextStates[invocationID] else {
+      submitEngineCommand(.finish(id: invocationID))
+      return
+    }
+    state.frozen = true
+    windowContextStates[invocationID] = state
+    windowContextCaptureTasks.removeValue(forKey: invocationID)?.cancel()
+    windowContextRevalidationTasks.removeValue(forKey: invocationID)?.cancel()
+
+    let acceptsEphemeralContext = state.provisionalUpdateAccepted
+      && state.revalidationSucceeded
+    DevelopmentTrace.shared.record(
+      "window context freeze generation=\(invocationID.generation) "
+        + "provisionalAccepted=\(state.provisionalUpdateAccepted) "
+        + "revalidationSucceeded=\(state.revalidationSucceeded) "
+        + "retained=\(acceptsEphemeralContext)"
+    )
+    if !acceptsEphemeralContext, state.selectedContext != nil, let localBackend {
+      _ = localBackend.submitInvocationContextUpdate(
+        id: invocationID,
+        context: LocalInvocationContext(permanentEntries: state.permanentEntries)
+      )
+    }
+    windowContextStates.removeValue(forKey: invocationID)
+    submitEngineCommand(.finish(id: invocationID))
+  }
+
+  private func clearWindowContext(
+    for invocationID: TranscriptionInvocationID
+  ) {
+    windowContextCaptureTasks.removeValue(forKey: invocationID)?.cancel()
+    windowContextRevalidationTasks.removeValue(forKey: invocationID)?.cancel()
+    windowContextStates.removeValue(forKey: invocationID)
+  }
+
+  private var activeWindowContextIsAvailable: Bool {
+    activeEngine == .fluidAudio
+      && localModels.activeWindowContextEnabled
+      && localModels.correctionEnabled
+      && localModels.installedIDs.contains(LocalModelCatalog.correctionID)
+      && accessibilityTrusted
+  }
+
+  private func traceWindowContextSelection(
+    collection: WindowTextCollection,
+    candidates: [String],
+    evidence: [WindowTermEvidence],
+    context: LocalInvocationContext,
+    invocationID: TranscriptionInvocationID
+  ) {
+    DevelopmentTrace.shared.record(
+      "window context capture generation=\(invocationID.generation) "
+        + "targetPID=\(collection.target.processID) "
+        + "fragments=\(collection.fragments.count) candidates=\(candidates.count) "
+        + "classified=\(evidence.count) selected=\(context.ephemeralEntries.count) "
+        + "visited=\(collection.diagnostics.visitedElements) "
+        + "characters=\(collection.diagnostics.collectedCharacters) "
+        + "elapsed=\(collection.diagnostics.elapsed) "
+        + "elementLimit=\(collection.diagnostics.reachedElementLimit) "
+        + "depthLimit=\(collection.diagnostics.reachedDepthLimit) "
+        + "characterLimit=\(collection.diagnostics.reachedCharacterLimit) "
+        + "deadline=\(collection.diagnostics.reachedDeadline)"
+    )
+    for decision in collection.diagnostics.rangeDecisions {
+      DevelopmentTrace.shared.record(
+        "window context range generation=\(invocationID.generation) "
+          + "application=\(decision.applicationIdentifier ?? "unknown") "
+          + "strategy=\(decision.strategy.rawValue) "
+          + "reported={\(decision.reportedRange.location),\(decision.reportedRange.length)} "
+          + "effective={\(decision.effectiveRange.location),\(decision.effectiveRange.length)}"
+      )
+    }
+    for (index, fragment) in collection.fragments.enumerated() {
+      DevelopmentTrace.shared.record(
+        "window context fragment generation=\(invocationID.generation) index=\(index) "
+          + "source=\(fragment.source) relevance=\(fragment.relevance) "
+          + "visibility=\(fragment.visibility) text=\(String(reflecting: fragment.text))"
+      )
+    }
+    DevelopmentTrace.shared.record(
+      "window context candidates generation=\(invocationID.generation) "
+        + "terms=\(String(reflecting: candidates))"
+    )
+    let classifications = evidence.map {
+      "\($0.term)=\($0.lexiconClassification):representable=\($0.isCorrectionRepresentable)"
+    }
+    DevelopmentTrace.shared.record(
+      "window context evidence generation=\(invocationID.generation) "
+        + "terms=\(String(reflecting: classifications))"
+    )
+    let selected = context.ephemeralEntries.map(\.canonicalText)
+    DevelopmentTrace.shared.record(
+      "window context selected generation=\(invocationID.generation) "
+        + "cap=\(ActiveWindowContextSelector.defaultMaximumEphemeralTerms) "
+        + "saturated=\(selected.count == ActiveWindowContextSelector.defaultMaximumEphemeralTerms) "
+        + "terms=\(String(reflecting: selected))"
+    )
+    let resolved = context.resolvedEntries.map {
+      "\($0.canonicalText) aliases=\(String(reflecting: $0.explicitAliases))"
+    }
+    DevelopmentTrace.shared.record(
+      "window context resolved generation=\(invocationID.generation) "
+        + "entries=\(String(reflecting: resolved))"
+    )
+  }
+
+  #if DEBUG
+    var windowContextInspectionIsAvailable: Bool {
+      activeWindowContextIsAvailable
+    }
+
+    func inspectNextWindowContextCapture() {
+      windowContextInspection = nil
+      windowContextInspectionArmed = true
+    }
+  #endif
 
   private func insert(generation: Int, text: String) {
     let expectedEpoch = session.epoch
@@ -1529,7 +1807,8 @@ private extension AppModel {
         configurationResult = try await AppModelCoordinationPolicy.applyLocalConfiguration {
           try await localBackend.updateConfiguration(
             context: context,
-            correctionPolicy: policy
+            correctionPolicy: policy,
+            allowsEphemeralContext: localModels.activeWindowContextEnabled
           )
         }
       } catch is CancellationError {
@@ -1583,7 +1862,12 @@ private extension AppModel {
       replacementLocalBackend = nil
       replacementAPIKey = apiKey
     } else {
-      let local = FluidAudioTranscriptionBackend(store: localModels.store, context: context, correctionPolicy: policy)
+      let local = FluidAudioTranscriptionBackend(
+        store: localModels.store,
+        context: context,
+        correctionPolicy: policy,
+        allowsEphemeralContext: localModels.activeWindowContextEnabled
+      )
       runtime = local
       replacementBackend = nil
       replacementLocalBackend = local
@@ -1620,7 +1904,6 @@ private extension AppModel {
     localBackend = replacementLocalBackend
     savedAPIKey = replacementAPIKey ?? savedAPIKey
     apiKeyDraft = replacementAPIKey ?? apiKeyDraft
-    DevelopmentTrace.shared.localTranscriptionSelected = selection == .fluidAudio
     publishSessionState()
     localModels.loadState = .unloaded
     changingEngine = false
