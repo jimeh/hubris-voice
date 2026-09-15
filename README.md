@@ -207,6 +207,7 @@ Each traced process writes a separate `development-<pid>-<uuid>.log` under
 contain raw dictated text, focused-field text before and after insertion, and
 on-device active-window context including captured fragments, candidates,
 classifications, selected terms, generated aliases, and context lifecycle
+decisions. Local runs also include raw and candidate correction text plus guard
 decisions. They are for development only; delete them after the investigation.
 They are not rotated automatically. Credentials, audio, and previous clipboard
 contents are not recorded. The normal `realtime.log` remains sanitized.

@@ -26,7 +26,8 @@ English correction model. It does not:
 - persist captured text or selected terms;
 - continuously observe applications between dictations;
 - modify another application's preferences or enable its screen-reader mode;
-- add application-specific rules for Xcode, VS Code, terminals, or browsers; or
+- add broad application-specific traversal rules for Xcode, VS Code, terminals,
+  or browsers; or
 - promise exact spelling when the local correction model lacks sufficient
   acoustic evidence.
 
@@ -152,6 +153,14 @@ text control within a small per-control limit. Batch supported attribute reads
 where practical. Treat unsupported attributes and individual element failures
 as missing evidence rather than failure of the whole snapshot.
 
+Some applications overreport `AXVisibleCharacterRange`. When a text element
+supports `AXRangeForPosition`, `AXLineForIndex`, and `AXRangeForLine`, derive the
+effective range from the nearest scroll area's screen bounds and retain complete
+boundary lines. Ghostty currently reports its complete cached buffer as visible
+without exposing range geometry, so keep only its final 200 logical lines through
+a centralized bundle-specific fallback. Remove that fallback when Ghostty
+provides accurate visibility information.
+
 Use initial defensive limits that are easy to tune from probe evidence:
 
 - 300 ms overall collection deadline;
@@ -163,9 +172,10 @@ Use initial defensive limits that are easy to tune from probe evidence:
 - 40 selected ephemeral terms. Native testing in an identifier-dense T3 Code
   window saturated the initial 20-term cap and excluded newly visible terms.
 
-Return useful partial results when any limit is reached. Record only aggregate
-limit and timing counters in diagnostics. Do not record element text, attribute
-values, candidate terms, or selected terms.
+Return useful partial results when any limit is reached. Normal diagnostics
+record only aggregate limit and timing counters. The explicitly enabled,
+debug-only development trace may also record captured text, selected terms,
+reported and effective ranges, and the strategy used to choose them.
 
 Native probing of T3 Code found visible chat text at depths 19 through 22 and,
 in a longer conversation, beyond the 1,500th breadth-first element. Natural
@@ -404,8 +414,9 @@ feature as best-effort local context, not guaranteed correction.
   ephemeral cap are deterministic.
 - Fake AX trees cover visible-child preference, unsupported attributes, cycles,
   secure focus, hidden descendants, an offscreen identifier in a small
-  scrollable document, oversized values, depth, node, character, and time
-  limits, and useful partial results.
+  scrollable document, geometry refinement of an overreported terminal range,
+  the bounded Ghostty fallback, oversized values, depth, node, character, and
+  time limits, and useful partial results.
 - Microphone capture starts without awaiting context collection.
 - Cloud, correction-disabled, model-unavailable, setting-disabled, and
   Accessibility-denied paths never collect or submit window terms.
@@ -417,7 +428,8 @@ feature as best-effort local context, not guaranteed correction.
 - Distinctive sentinel window text never reaches Realtime payloads, settings,
   history, or sanitized diagnostic logs. An explicitly enabled debug-build
   development trace records captured fragments, candidates, selected terms,
-  aliases, and context lifecycle decisions.
+  aliases, range strategies, raw and candidate correction text, guard decisions,
+  and context lifecycle decisions.
 - Per-invocation vocabulary replacement retains loaded primary and CTC assets,
   and correction failure preserves usable raw text.
 - With correction and active-window terms enabled, an empty permanent dictionary
@@ -441,8 +453,9 @@ feature as best-effort local context, not guaranteed correction.
 - Probe the existing `AXManualAccessibility` fallback independently and confirm
   whether it changes Electron or VS Code runtime behavior before sharing any AX
   discovery code with the collector.
-- Exercise native and custom UI applications by observed AX capability rather
-  than accepting per-application exceptions.
+- Exercise native and custom UI applications by observed AX capability. Keep
+  application-specific exceptions centralized, bounded, and supported by probe
+  evidence, as with the temporary Ghostty trailing-line fallback.
 - Compare automatic context with the baseline and manually selected ideal terms
   on fresh microphone recordings. Do not enable the feature by default or
   recommend general use if surrounding-word regressions outweigh identifier

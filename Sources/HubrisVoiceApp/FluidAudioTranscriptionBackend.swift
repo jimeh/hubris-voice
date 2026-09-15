@@ -45,7 +45,12 @@ final class FluidAudioTranscriptionBackend: TranscriptionEngineRuntime, @uncheck
       LocalInvocationContext,
       LocalCorrectionPolicy
     ) async throws -> FluidAudioModelLease,
-    acquireCorrection: @escaping @Sendable () async throws -> FluidAudioCorrectionLease? = { nil }
+    acquireCorrection: @escaping @Sendable () async throws -> FluidAudioCorrectionLease? = { nil },
+    trace: @escaping @Sendable (String) -> Void = { message in
+      Task { @MainActor in
+        DevelopmentTrace.shared.record(message)
+      }
+    }
   ) {
     let pair = AsyncStream.makeStream(of: TranscriptionEngineEvent.self)
     events = pair.stream
@@ -56,6 +61,7 @@ final class FluidAudioTranscriptionBackend: TranscriptionEngineRuntime, @uncheck
       processor: processor,
       acquireModels: acquireModels,
       acquireCorrection: acquireCorrection,
+      trace: trace,
       events: pair.continuation
     )
     let stream = commands.stream

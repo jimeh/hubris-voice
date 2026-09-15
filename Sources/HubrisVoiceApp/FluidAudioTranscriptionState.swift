@@ -25,6 +25,7 @@ actor FluidAudioTranscriptionState {
     LocalCorrectionPolicy
   ) async throws -> FluidAudioModelLease
   private let acquireCorrection: @Sendable () async throws -> FluidAudioCorrectionLease?
+  private let trace: @Sendable (String) -> Void
   private let events: AsyncStream<TranscriptionEngineEvent>.Continuation
   private var epoch = TranscriptionBackendEpoch(0)
   private var lease: FluidAudioModelLease?
@@ -52,6 +53,7 @@ actor FluidAudioTranscriptionState {
       LocalCorrectionPolicy
     ) async throws -> FluidAudioModelLease,
     acquireCorrection: @escaping @Sendable () async throws -> FluidAudioCorrectionLease?,
+    trace: @escaping @Sendable (String) -> Void = { _ in },
     events: AsyncStream<TranscriptionEngineEvent>.Continuation
   ) {
     self.context = context
@@ -60,6 +62,7 @@ actor FluidAudioTranscriptionState {
     self.processor = processor
     self.acquireModels = acquireModels
     self.acquireCorrection = acquireCorrection
+    self.trace = trace
     self.events = events
   }
 
@@ -405,6 +408,19 @@ actor FluidAudioTranscriptionState {
       case .applied, .unchanged: .applied
       case .rejected: .degraded
       }
+      let decisions = corrected.decisions.map { decision in
+        "raw=\(String(reflecting: decision.rawText)) "
+          + "candidate=\(String(reflecting: decision.candidateText)) "
+          + "accepted=\(decision.accepted) reason=\(decision.reason)"
+      }
+      trace(
+        "local correction generation=\(activeID.generation) "
+          + "raw=\(String(reflecting: final.rawText)) "
+          + "candidate=\(String(reflecting: final.candidateText)) "
+          + "outcome=\(corrected.outcome) "
+          + "decisions=\(String(reflecting: decisions)) "
+          + "final=\(String(reflecting: corrected.text))"
+      )
       events.yield(.final(
         id: activeID,
         result: TranscriptionFinalResult(text: corrected.text, correction: outcome)

@@ -270,6 +270,87 @@ final class WindowTextCollectorTests: XCTestCase {
     XCTAssertEqual(reader.requestedRanges.first?.length, 50)
   }
 
+  func testGeometryCapabilitiesClipAnOverreportedTerminalRangeToTheScrollArea() {
+    let reader = FakeReader(
+      focused: 2,
+      nodes: [
+        0: node(role: "AXWindow", frame: rect(0, 0, 500, 500), children: [1]),
+        1: node(
+          role: "AXScrollArea",
+          frame: rect(0, 100, 500, 300),
+          parent: 0,
+          children: [2]
+        ),
+        2: node(
+          role: "AXTextArea",
+          frame: rect(0, -300, 500, 700),
+          valueCount: 1_000,
+          parent: 1,
+          visibleRange: CFRange(location: 0, length: 1_000),
+          rangeValue: "in view\nAppModelExample"
+        ),
+      ],
+      positionRanges: [
+        CFRange(location: 420, length: 1),
+        CFRange(location: 480, length: 1),
+        CFRange(location: 920, length: 1),
+        CFRange(location: 980, length: 1),
+      ],
+      lineLength: 100,
+      supportsLineRanges: true
+    )
+
+    let result = WindowTextTraversal.collect(from: reader)
+
+    XCTAssertEqual(result.fragments.map(\.text), ["in view\nAppModelExample"])
+    XCTAssertEqual(reader.requestedRanges.count, 1)
+    XCTAssertEqual(reader.requestedRanges.first?.location, 400)
+    XCTAssertEqual(reader.requestedRanges.first?.length, 600)
+    XCTAssertEqual(reader.requestedPositions.count, 4)
+    XCTAssertEqual(result.diagnostics.rangeDecisions.first?.strategy, .geometryClipped)
+    XCTAssertEqual(result.diagnostics.rangeDecisions.first?.reportedRange.location, 0)
+    XCTAssertEqual(result.diagnostics.rangeDecisions.first?.reportedRange.length, 1_000)
+    XCTAssertEqual(result.diagnostics.rangeDecisions.first?.effectiveRange.location, 400)
+    XCTAssertEqual(result.diagnostics.rangeDecisions.first?.effectiveRange.length, 600)
+  }
+
+  func testGhosttyFallbackKeepsOnlyTheTrailingLogicalLines() {
+    let reader = FakeReader(
+      applicationIdentifier: "com.mitchellh.ghostty",
+      focused: 2,
+      nodes: [
+        0: node(role: "AXWindow", frame: rect(0, 0, 500, 500), children: [1]),
+        1: node(
+          role: "AXScrollArea",
+          frame: rect(0, 0, 500, 500),
+          parent: 0,
+          children: [2]
+        ),
+        2: node(
+          role: "AXTextArea",
+          frame: rect(0, 0, 500, 500),
+          valueCount: 2_500,
+          parent: 1,
+          visibleRange: CFRange(location: 0, length: 2_500),
+          rangeValue: "recent terminal lines"
+        ),
+      ],
+      lineLength: 10
+    )
+
+    let result = WindowTextTraversal.collect(from: reader)
+
+    XCTAssertEqual(result.fragments.map(\.text), ["recent terminal lines"])
+    XCTAssertEqual(reader.requestedRanges.count, 1)
+    XCTAssertEqual(reader.requestedRanges.first?.location, 500)
+    XCTAssertEqual(reader.requestedRanges.first?.length, 2_000)
+    XCTAssertEqual(result.diagnostics.rangeDecisions.first?.strategy, .trailingLines)
+    XCTAssertEqual(
+      result.diagnostics.rangeDecisions.first?.applicationIdentifier,
+      "com.mitchellh.ghostty"
+    )
+  }
+
   func testSecureFocusedElementRejectsAllWindowText() {
     let reader = FakeReader(
       focused: 1,
@@ -529,15 +610,31 @@ private final class FakeReader: AccessibilityWindowReading {
   }
 
   let target = AccessibilityWindowTarget(processID: 42, windowNumber: 7)
+  let applicationIdentifier: String?
   let window = 0
   let focusedElement: Int?
   private let nodes: [Int: FakeNode]
+  private let positionRanges: [CFRange]
+  private let lineLength: Int?
+  private let supportsLineRanges: Bool
   private(set) var requestedStrings: [StringRequest] = []
   private(set) var requestedRanges: [CFRange] = []
+  private(set) var requestedPositions: [CGPoint] = []
 
-  init(focused: Int? = nil, nodes: [Int: FakeNode]) {
+  init(
+    applicationIdentifier: String? = nil,
+    focused: Int? = nil,
+    nodes: [Int: FakeNode],
+    positionRanges: [CFRange] = [],
+    lineLength: Int? = nil,
+    supportsLineRanges: Bool = false
+  ) {
+    self.applicationIdentifier = applicationIdentifier
     focusedElement = focused
     self.nodes = nodes
+    self.positionRanges = positionRanges
+    self.lineLength = lineLength
+    self.supportsLineRanges = supportsLineRanges
   }
 
   func metadata(for node: Int) -> AccessibilityNodeMetadata<Int> {
@@ -577,6 +674,21 @@ private final class FakeReader: AccessibilityWindowReading {
       fatalError("Missing fake AX node \(node)")
     }
     return value.rangeValue
+  }
+
+  func range(at position: CGPoint, from _: Int) -> CFRange? {
+    requestedPositions.append(position)
+    let index = requestedPositions.count - 1
+    return positionRanges.indices.contains(index) ? positionRanges[index] : nil
+  }
+
+  func line(forCharacterAt index: Int, from _: Int) -> Int? {
+    lineLength.map { index / $0 }
+  }
+
+  func range(forLine line: Int, from _: Int) -> CFRange? {
+    guard supportsLineRanges, let lineLength else { return nil }
+    return CFRange(location: line * lineLength, length: lineLength)
   }
 }
 

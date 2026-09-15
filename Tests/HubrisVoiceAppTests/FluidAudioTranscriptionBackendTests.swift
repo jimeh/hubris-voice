@@ -79,6 +79,50 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
     XCTAssertTrue(events.contains(.preview(id: invocation.id, text: "raw preview")))
   }
 
+  func testTraceRecordsRawCandidateAndGuardDecisions() async throws {
+    let processor = FakeFluidAudioProcessor(
+      final: FluidAudioProcessResult(
+        rawText: "Use user underscore ID, please.",
+        candidateText: "Use user_id please"
+      )
+    )
+    let trace = TraceRecorder()
+    let backend = makeBackend(
+      processor: processor,
+      policy: .strict,
+      trace: trace.record
+    )
+    let recorder = EventRecorder(stream: backend.events)
+    let invocation = makeInvocation(generation: 12)
+
+    XCTAssertTrue(backend.submit(.prepare(epoch: invocation.id.epoch)))
+    _ = try await recorder.waitUntil {
+      if case .readiness(_, .ready) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+    XCTAssertTrue(backend.submit(.begin(invocation)))
+    XCTAssertTrue(backend.submit(.finish(id: invocation.id)))
+    _ = try await recorder.waitUntil {
+      if case .final(id: invocation.id, _) = $0 {
+        true
+      } else {
+        false
+      }
+    }
+
+    let messages = trace.snapshot()
+    XCTAssertEqual(messages.count, 1)
+    XCTAssertTrue(messages[0].contains("generation=12"))
+    XCTAssertTrue(messages[0].contains("raw=\"Use user underscore ID, please.\""))
+    XCTAssertTrue(messages[0].contains("candidate=Optional(\"Use user_id please\")"))
+    XCTAssertTrue(messages[0].contains("outcome=applied"))
+    XCTAssertTrue(messages[0].contains("reason=canonicalSubstitution"))
+    XCTAssertTrue(messages[0].contains("final=\"Use user_id, please.\""))
+  }
+
   func testCancellationRetiresFinalizingInvocationAndReplaysNextBufferedAudio() async throws {
     let processor = FakeFluidAudioProcessor(
       final: FluidAudioProcessResult(rawText: "second result", candidateText: nil),
@@ -1260,6 +1304,7 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
     policy: LocalCorrectionPolicy,
     release: @escaping @Sendable () async -> Void = {},
     correctionRelease: @escaping @Sendable () async -> Void = {},
+    trace: @escaping @Sendable (String) -> Void = { _ in },
     context: LocalInvocationContext = LocalInvocationContext(permanentEntries: [
       LocalVocabularyEntry(canonicalText: "user_id"),
     ])
@@ -1279,7 +1324,8 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
           directory: URL(fileURLWithPath: "/owned/ctc"),
           release: correctionRelease
         )
-      }
+      },
+      trace: trace
     )
   }
 
@@ -1288,6 +1334,21 @@ final class FluidAudioTranscriptionBackendTests: XCTestCase {
       id: TranscriptionInvocationID(epoch: TranscriptionBackendEpoch(7), generation: generation),
       format: .local
     )
+  }
+}
+
+private final class TraceRecorder: @unchecked Sendable {
+  private let lock = NSLock()
+  private var messages: [String] = []
+
+  func record(_ message: String) {
+    lock.withLock {
+      messages.append(message)
+    }
+  }
+
+  func snapshot() -> [String] {
+    lock.withLock { messages }
   }
 }
 

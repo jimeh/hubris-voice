@@ -1434,6 +1434,15 @@ final class AppModel: ObservableObject {
         + "characterLimit=\(collection.diagnostics.reachedCharacterLimit) "
         + "deadline=\(collection.diagnostics.reachedDeadline)"
     )
+    for decision in collection.diagnostics.rangeDecisions {
+      DevelopmentTrace.shared.record(
+        "window context range generation=\(invocationID.generation) "
+          + "application=\(decision.applicationIdentifier ?? "unknown") "
+          + "strategy=\(decision.strategy.rawValue) "
+          + "reported={\(decision.reportedRange.location),\(decision.reportedRange.length)} "
+          + "effective={\(decision.effectiveRange.location),\(decision.effectiveRange.length)}"
+      )
+    }
     for (index, fragment) in collection.fragments.enumerated() {
       DevelopmentTrace.shared.record(
         "window context fragment generation=\(invocationID.generation) index=\(index) "

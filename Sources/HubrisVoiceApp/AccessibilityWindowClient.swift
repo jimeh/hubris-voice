@@ -64,6 +64,7 @@ private struct AXNode: Hashable, @unchecked Sendable {
 
 private struct AXWindowClient: AccessibilityWindowReading, @unchecked Sendable {
   let target: AccessibilityWindowTarget
+  let applicationIdentifier: String?
   let window: AXNode
   let focusedElement: AXNode?
 
@@ -79,6 +80,7 @@ private struct AXWindowClient: AccessibilityWindowReading, @unchecked Sendable {
     overallTimeout: Duration
   ) {
     let readDeadline = AXReadDeadline(timeout: overallTimeout)
+    applicationIdentifier = NSRunningApplication(processIdentifier: processID)?.bundleIdentifier
     let application = AXUIElementCreateApplication(processID)
     AXUIElementSetMessagingTimeout(application, Float(messagingTimeout))
     guard let window = Self.element(
@@ -189,17 +191,55 @@ private struct AXWindowClient: AccessibilityWindowReading, @unchecked Sendable {
   }
 
   func string(for range: CFRange, from node: AXNode) -> String? {
-    guard !readDeadline.expired else { return nil }
     var range = range
     guard let parameter = AXValueCreate(.cfRange, &range) else { return nil }
+    return parameterizedValue(
+      kAXStringForRangeParameterizedAttribute,
+      parameter: parameter,
+      from: node
+    ) as? String
+  }
+
+  func range(at position: CGPoint, from node: AXNode) -> CFRange? {
+    var position = position
+    guard let parameter = AXValueCreate(.cgPoint, &position) else { return nil }
+    return Self.range(parameterizedValue(
+      kAXRangeForPositionParameterizedAttribute,
+      parameter: parameter,
+      from: node
+    ))
+  }
+
+  func line(forCharacterAt index: Int, from node: AXNode) -> Int? {
+    Self.number(parameterizedValue(
+      kAXLineForIndexParameterizedAttribute,
+      parameter: NSNumber(value: index),
+      from: node
+    ))
+  }
+
+  func range(forLine line: Int, from node: AXNode) -> CFRange? {
+    Self.range(parameterizedValue(
+      kAXRangeForLineParameterizedAttribute,
+      parameter: NSNumber(value: line),
+      from: node
+    ))
+  }
+
+  private func parameterizedValue(
+    _ attribute: String,
+    parameter: CFTypeRef,
+    from node: AXNode
+  ) -> CFTypeRef? {
+    guard !readDeadline.expired else { return nil }
     var value: CFTypeRef?
     guard AXUIElementCopyParameterizedAttributeValue(
       node.element,
-      kAXStringForRangeParameterizedAttribute as CFString,
+      attribute as CFString,
       parameter,
       &value
     ) == .success else { return nil }
-    return value as? String
+    return value
   }
 
   private static func value(

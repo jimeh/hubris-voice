@@ -49,8 +49,12 @@ updates are rejected.
 
 The collector prefers selected, focused, editor-local, and visible-range text.
 It accepts other descendants only with `AXVisibleChildren` or geometry evidence
-through the window and known clipping ancestors. It limits AX messaging time,
-overall time, nodes, depth, characters, and selected terms. It never writes
+through the window and known clipping ancestors. When supported, point-to-range
+and line-range parameterized attributes refine overreported visible ranges to
+the nearest scroll viewport. Ghostty's current AX implementation exposes no
+range geometry and reports its complete buffer as visible, so a centralized
+fallback retains its final 200 logical lines. The collector limits AX messaging
+time, overall time, nodes, depth, characters, and selected terms. It never writes
 `AXManualAccessibility`, invokes target-app commands, or changes screen-reader
 settings. The existing Electron insertion fallback remains separate; context
 capture deliberately resolves its initial anchor without invoking that fallback.
@@ -94,9 +98,10 @@ The vendored logger has no output sink in either debug or release builds.
 `third-party/vendor/sources.json`, including the documented compiler-compatibility
 fixes. The commit hook checks index/worktree agreement before verifying vendor
 integrity instead of formatting third-party sources. Hubris Voice's optional,
-debug-only raw development trace records local transcript and active-window
-context details when explicitly enabled with `--development-trace`. Normal
-diagnostics contain no local vocabulary or transcript text.
+debug-only raw development trace records local raw and candidate correction text,
+guard decisions, and active-window context details when explicitly enabled with
+`--development-trace`. Normal diagnostics contain no local vocabulary or
+transcript text.
 
 ## Model storage and attribution
 

@@ -32,6 +32,7 @@ struct WindowTextCollectionDiagnostics: Equatable, Sendable {
   var reachedDepthLimit = false
   var reachedCharacterLimit = false
   var reachedDeadline = false
+  var rangeDecisions: [WindowTextRangeDecision] = []
 }
 
 struct WindowTextCollection: Equatable, Sendable {
@@ -66,12 +67,34 @@ protocol AccessibilityWindowReading {
   associatedtype Node: Hashable
 
   var target: AccessibilityWindowTarget { get }
+  var applicationIdentifier: String? { get }
   var window: Node { get }
   var focusedElement: Node? { get }
 
   func metadata(for node: Node) -> AccessibilityNodeMetadata<Node>
   func string(_ attribute: AccessibilityStringAttribute, from node: Node) -> String?
   func string(for range: CFRange, from node: Node) -> String?
+  func range(at position: CGPoint, from node: Node) -> CFRange?
+  func line(forCharacterAt index: Int, from node: Node) -> Int?
+  func range(forLine line: Int, from node: Node) -> CFRange?
+}
+
+extension AccessibilityWindowReading {
+  var applicationIdentifier: String? {
+    nil
+  }
+
+  func range(at _: CGPoint, from _: Node) -> CFRange? {
+    nil
+  }
+
+  func line(forCharacterAt _: Int, from _: Node) -> Int? {
+    nil
+  }
+
+  func range(forLine _: Int, from _: Node) -> CFRange? {
+    nil
+  }
 }
 
 enum AccessibilityStringAttribute {
@@ -118,17 +141,8 @@ enum WindowTextTraversal {
       editorLocal: false
     )]
     if let focused, focused != reader.window {
-      var priorityNodes = [Pending(
-        node: focused,
-        depth: 0,
-        visibility: visibility(
-          metadata: reader.metadata(for: focused),
-          windowFrame: windowFrame,
-          clippingRects: initialClips
-        ),
-        clippingRects: initialClips,
-        editorLocal: true
-      )]
+      var focusedClips = initialClips
+      var containingEditor: Pending<Reader.Node>?
       var ancestor = reader.metadata(for: focused).parent
       var ancestorDepth = 0
       var ancestorSeen: Set<Reader.Node> = [focused]
@@ -139,7 +153,7 @@ enum WindowTextTraversal {
       {
         let metadata = reader.metadata(for: node)
         if isClippingRole(metadata.role) || isScrollableText(metadata.role) {
-          priorityNodes.append(Pending(
+          containingEditor = Pending(
             node: node,
             depth: 0,
             visibility: visibility(
@@ -149,11 +163,28 @@ enum WindowTextTraversal {
             ),
             clippingRects: initialClips,
             editorLocal: true
-          ))
+          )
+          if isClippingRole(metadata.role), let frame = metadata.frame {
+            focusedClips.append(frame)
+          }
           break
         }
         ancestor = metadata.parent
         ancestorDepth += 1
+      }
+      var priorityNodes = [Pending(
+        node: focused,
+        depth: 0,
+        visibility: visibility(
+          metadata: reader.metadata(for: focused),
+          windowFrame: windowFrame,
+          clippingRects: focusedClips
+        ),
+        clippingRects: focusedClips,
+        editorLocal: true
+      )]
+      if let containingEditor {
+        priorityNodes.append(containingEditor)
       }
       queue.insert(contentsOf: priorityNodes, at: 0)
     }
@@ -212,10 +243,18 @@ enum WindowTextTraversal {
           ? .primary
           : (pending.editorLocal ? .nearby : .general)
         if let visibleRange = metadata.visibleCharacterRange, visibleRange.length > 0 {
+          let decision = WindowTextRangeResolver.resolve(
+            visibleRange,
+            metadata: metadata,
+            node: pending.node,
+            clippingRects: pending.clippingRects,
+            reader: reader
+          )
+          diagnostics.rangeDecisions.append(decision)
           let remaining = max(0, limits.maximumCharacters - diagnostics.collectedCharacters)
           let boundedRange = CFRange(
-            location: visibleRange.location,
-            length: min(visibleRange.length, remaining)
+            location: decision.effectiveRange.location,
+            length: min(decision.effectiveRange.length, remaining)
           )
           append(
             reader.string(for: boundedRange, from: pending.node),
