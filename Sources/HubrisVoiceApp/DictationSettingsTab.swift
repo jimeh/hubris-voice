@@ -98,6 +98,28 @@ struct DictationSettingsTab: View {
               .font(.caption).foregroundStyle(.secondary)
           }
         }
+        Section("Transcription context") {
+          SettingsRow(
+            title: "Use active-window terms",
+            caption: "Temporarily reads visible text from the active window to improve names and identifiers. On-device only."
+          ) {
+            Toggle(
+              "Use active-window terms",
+              isOn: $localModels.activeWindowContextEnabled
+            )
+            .labelsHidden()
+          }
+          if !localModels.correctionEnabled {
+            Text("Turn on Dictionary correction to use active-window terms.")
+              .font(.caption).foregroundStyle(.secondary)
+          } else if !localModels.installedIDs.contains(LocalModelCatalog.correctionID) {
+            Text("Download Dictionary correction in Models to use active-window terms.")
+              .font(.caption).foregroundStyle(.secondary)
+          } else if !model.accessibilityTrusted {
+            Text("Accessibility permission is required. Enable it in Permissions.")
+              .font(.caption).foregroundStyle(.secondary)
+          }
+        }
       }
       Section("Insertion") {
         SettingsRow(

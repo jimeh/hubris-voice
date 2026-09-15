@@ -1,12 +1,16 @@
 import Foundation
 import HubrisVoiceCore
 
+// swiftlint:disable file_length
+
 actor FluidAudioTranscriptionState {
   private struct Invocation {
     var nextSequence = 0
     var audioBytes = 0
     var chunks: [Data] = []
     var finishRequested = false
+    var context: LocalInvocationContext
+    var contextNeedsPreparation = true
   }
 
   private static let maximumInvocations = 4
@@ -14,6 +18,7 @@ actor FluidAudioTranscriptionState {
 
   private var context: LocalInvocationContext
   private var correctionPolicy: LocalCorrectionPolicy
+  private var allowsEphemeralContext: Bool
   private let processor: any FluidAudioProcessing
   private let acquireModels: @Sendable (
     LocalInvocationContext,
@@ -40,6 +45,7 @@ actor FluidAudioTranscriptionState {
   init(
     context: LocalInvocationContext,
     correctionPolicy: LocalCorrectionPolicy,
+    allowsEphemeralContext: Bool = false,
     processor: any FluidAudioProcessing,
     acquireModels: @escaping @Sendable (
       LocalInvocationContext,
@@ -50,6 +56,7 @@ actor FluidAudioTranscriptionState {
   ) {
     self.context = context
     self.correctionPolicy = correctionPolicy
+    self.allowsEphemeralContext = allowsEphemeralContext
     self.processor = processor
     self.acquireModels = acquireModels
     self.acquireCorrection = acquireCorrection
@@ -101,6 +108,12 @@ actor FluidAudioTranscriptionState {
   private func prepare(epoch: TranscriptionBackendEpoch) {
     preparationGeneration &+= 1
     let generation = preparationGeneration
+    if self.epoch != epoch {
+      operationTask?.cancel()
+      invocations.removeAll()
+      order.removeAll()
+      activeID = nil
+    }
     self.epoch = epoch
     isPrepared = false
     events.yield(.readiness(epoch: epoch, state: .preparing(message: "Loading local model…")))
@@ -109,11 +122,13 @@ actor FluidAudioTranscriptionState {
     pendingReconfiguration?.cancel()
     let context = context
     let correctionPolicy = correctionPolicy
+    let allowsEphemeralContext = allowsEphemeralContext
     preparationTask = Task { [weak self, acquireModels, acquireCorrection, context, correctionPolicy, processor] in
       do {
         _ = await pendingReconfiguration?.value
         let lease = try await acquireModels(context, correctionPolicy)
-        let needsCorrection = correctionPolicy == .strict && !context.resolvedEntries.isEmpty
+        let needsCorrection = correctionPolicy == .strict
+          && (!context.resolvedEntries.isEmpty || allowsEphemeralContext)
         let correctionLease = needsCorrection ? try? await acquireCorrection() : nil
         do {
           try Task.checkCancellation()
@@ -215,7 +230,7 @@ actor FluidAudioTranscriptionState {
       fail(invocation.id, kind: .capture, message: "Too many local snippets are pending.")
       return
     }
-    invocations[invocation.id] = Invocation()
+    invocations[invocation.id] = Invocation(context: context)
     order.append(invocation.id)
     pump()
   }
@@ -248,6 +263,23 @@ actor FluidAudioTranscriptionState {
     pump()
   }
 
+  func updateInvocationContext(
+    id invocationID: TranscriptionInvocationID,
+    context: LocalInvocationContext
+  ) -> Bool {
+    guard var invocation = invocations[invocationID], !retired.contains(invocationID),
+          !invocation.finishRequested, invocationID.epoch == epoch
+    else { return false }
+    invocation.context = LocalInvocationContext(
+      permanentEntries: invocation.context.permanentEntries,
+      ephemeralEntries: context.ephemeralEntries
+    )
+    invocation.contextNeedsPreparation = true
+    invocations[invocationID] = invocation
+    pump()
+    return true
+  }
+
   private func cancel(id invocationID: TranscriptionInvocationID) {
     retired.insert(invocationID)
     if retired.count > 100 {
@@ -266,9 +298,16 @@ actor FluidAudioTranscriptionState {
     guard isPrepared, operationTask == nil else { return }
     if activeID == nil {
       activeID = order.first
-      guard activeID != nil else { return }
+      guard let activeID, var invocation = invocations[activeID] else { return }
+      invocation.contextNeedsPreparation = false
+      invocations[activeID] = invocation
+      let correctionPolicy = correctionPolicy
       operationTask = Task { [weak self, processor] in
         do {
+          try await processor.updateCorrection(
+            context: invocation.context,
+            correctionPolicy: correctionPolicy
+          )
           try await processor.reset()
           await self?.operationCompleted(preview: nil, final: nil, error: nil)
         } catch {
@@ -281,7 +320,22 @@ actor FluidAudioTranscriptionState {
       finishActive()
       return
     }
-    if !invocation.chunks.isEmpty {
+    if invocation.contextNeedsPreparation {
+      invocation.contextNeedsPreparation = false
+      invocations[activeID] = invocation
+      let correctionPolicy = correctionPolicy
+      operationTask = Task { [weak self, processor] in
+        do {
+          try await processor.updateCorrection(
+            context: invocation.context,
+            correctionPolicy: correctionPolicy
+          )
+          await self?.operationCompleted(preview: nil, final: nil, error: nil)
+        } catch {
+          await self?.operationCompleted(preview: nil, final: nil, error: error)
+        }
+      }
+    } else if !invocation.chunks.isEmpty {
       let chunk = invocation.chunks.removeFirst()
       invocations[activeID] = invocation
       operationTask = Task { [weak self, processor] in
@@ -328,17 +382,22 @@ actor FluidAudioTranscriptionState {
       events.yield(.preview(id: activeID, text: preview))
     }
     if let final {
+      guard let invocation = invocations[activeID] else {
+        finishActive()
+        return
+      }
+      let invocationContext = invocation.context
       let corrected: LocalCorrectionResult = if let candidate = final.candidateText {
         LocalTranscriptCorrection.guardCandidate(
           rawText: final.rawText,
           candidateText: candidate,
-          context: context,
+          context: invocationContext,
           policy: correctionPolicy
         )
       } else {
         LocalCorrectionResult(
           text: final.rawText,
-          outcome: correctionPolicy == .disabled || context.resolvedEntries.isEmpty ? .disabled : .rejected
+          outcome: correctionPolicy == .disabled || invocationContext.resolvedEntries.isEmpty ? .disabled : .rejected
         )
       }
       let outcome: TranscriptionCorrectionOutcome = switch corrected.outcome {
@@ -391,7 +450,8 @@ actor FluidAudioTranscriptionState {
 extension FluidAudioTranscriptionState {
   func updateConfiguration(
     context: LocalInvocationContext,
-    correctionPolicy: LocalCorrectionPolicy
+    correctionPolicy: LocalCorrectionPolicy,
+    allowsEphemeralContext: Bool = false
   ) async throws -> Bool {
     guard
       !isReconfiguring,
@@ -403,10 +463,14 @@ extension FluidAudioTranscriptionState {
     else {
       return false
     }
-    let previousContext = self.context
-    let previousCorrectionPolicy = self.correctionPolicy
+    let previousConfiguration = FluidAudioConfigurationSnapshot(
+      context: self.context,
+      correctionPolicy: self.correctionPolicy,
+      allowsEphemeralContext: self.allowsEphemeralContext
+    )
     self.context = context
     self.correctionPolicy = correctionPolicy
+    self.allowsEphemeralContext = allowsEphemeralContext
     guard let lease, isPrepared else { return true }
 
     let generation = preparationGeneration
@@ -415,7 +479,8 @@ extension FluidAudioTranscriptionState {
     activeReconfigurationID = reconfigurationID
     isReconfiguring = true
     isPrepared = false
-    let needsCorrection = correctionPolicy == .strict && !context.resolvedEntries.isEmpty
+    let needsCorrection = correctionPolicy == .strict
+      && (!context.resolvedEntries.isEmpty || allowsEphemeralContext)
     let existingCorrectionLease = correctionLease
     let task = Task { [acquireCorrection, processor] in
       await prepareFluidAudioReconfiguration(
@@ -442,8 +507,7 @@ extension FluidAudioTranscriptionState {
     case .failed(let acquiredCorrectionLease):
       return try await failReconfiguration(
         acquiredCorrectionLease: acquiredCorrectionLease,
-        previousContext: previousContext,
-        previousCorrectionPolicy: previousCorrectionPolicy,
+        previousConfiguration: previousConfiguration,
         generation: generation,
         reconfigurationID: reconfigurationID
       )
@@ -481,8 +545,7 @@ extension FluidAudioTranscriptionState {
 
   private func failReconfiguration(
     acquiredCorrectionLease: FluidAudioCorrectionLease?,
-    previousContext: LocalInvocationContext,
-    previousCorrectionPolicy: LocalCorrectionPolicy,
+    previousConfiguration: FluidAudioConfigurationSnapshot,
     generation: Int,
     reconfigurationID: Int
   ) async throws -> Bool {
@@ -496,8 +559,9 @@ extension FluidAudioTranscriptionState {
       retireReconfiguration(reconfigurationID)
       return false
     }
-    context = previousContext
-    correctionPolicy = previousCorrectionPolicy
+    context = previousConfiguration.context
+    correctionPolicy = previousConfiguration.correctionPolicy
+    allowsEphemeralContext = previousConfiguration.allowsEphemeralContext
     isPrepared = true
     retireReconfiguration(reconfigurationID)
     throw TranscriptionFailure(

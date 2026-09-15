@@ -22,21 +22,26 @@ public struct TranscriptionPreferences: Equatable, Sendable {
     public static let engine = "transcription.engine"
     public static let localModel = "transcription.local.model"
     public static let correctionEnabled = "transcription.local.correctionEnabled"
+    public static let activeWindowContextEnabled =
+      "transcription.local.accessibilityContextEnabled"
   }
 
   public static let defaultLocalModel = "parakeet-unified-en-320ms"
   public var engine: TranscriptionEngineSelection
   public var localModel: String
   public var correctionEnabled: Bool
+  public var activeWindowContextEnabled: Bool
 
   public init(
     engine: TranscriptionEngineSelection = .openAI,
     localModel: String = Self.defaultLocalModel,
-    correctionEnabled: Bool = true
+    correctionEnabled: Bool = true,
+    activeWindowContextEnabled: Bool = false
   ) {
     self.engine = engine
     self.localModel = localModel
     self.correctionEnabled = correctionEnabled
+    self.activeWindowContextEnabled = activeWindowContextEnabled
   }
 
   public static func load(from store: SettingsStore) -> Self {
@@ -44,7 +49,8 @@ public struct TranscriptionPreferences: Equatable, Sendable {
       engine: store.string(Key.engine).flatMap(TranscriptionEngineSelection.init(rawValue:))
         ?? (store.contains(Key.engine) ? .fluidAudio : .openAI),
       localModel: store.string(Key.localModel) ?? defaultLocalModel,
-      correctionEnabled: store.bool(Key.correctionEnabled) ?? true
+      correctionEnabled: store.bool(Key.correctionEnabled) ?? true,
+      activeWindowContextEnabled: store.bool(Key.activeWindowContextEnabled) ?? false
     )
   }
 
@@ -52,5 +58,6 @@ public struct TranscriptionPreferences: Equatable, Sendable {
     store.set(engine.rawValue, for: Key.engine)
     store.set(localModel, for: Key.localModel)
     store.set(correctionEnabled, for: Key.correctionEnabled)
+    store.set(activeWindowContextEnabled, for: Key.activeWindowContextEnabled)
   }
 }

@@ -6,6 +6,25 @@ final class TranscriptionPreferencesTests: XCTestCase {
     let preferences = TranscriptionPreferences.load(from: PreferenceStore())
     XCTAssertEqual(preferences.engine, .openAI)
     XCTAssertTrue(preferences.correctionEnabled)
+    XCTAssertFalse(preferences.activeWindowContextEnabled)
+  }
+
+  func testActiveWindowContextIsOptInAndPersistsIndependently() {
+    let store = PreferenceStore()
+    var preferences = TranscriptionPreferences(
+      engine: .fluidAudio,
+      correctionEnabled: false,
+      activeWindowContextEnabled: true
+    )
+    preferences.save(to: store)
+
+    preferences = TranscriptionPreferences.load(from: store)
+    XCTAssertTrue(preferences.activeWindowContextEnabled)
+    XCTAssertFalse(preferences.correctionEnabled)
+
+    preferences.engine = .openAI
+    preferences.save(to: store)
+    XCTAssertTrue(TranscriptionPreferences.load(from: store).activeWindowContextEnabled)
   }
 
   func testLocalCorrectionDefaultsOnWithoutSavedPreference() {

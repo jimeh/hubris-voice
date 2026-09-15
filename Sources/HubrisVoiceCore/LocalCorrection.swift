@@ -92,10 +92,23 @@ public enum LocalTranscriptCorrection {
     guard policy != .disabled else {
       return LocalCorrectionResult(text: rawText, outcome: .disabled)
     }
-    let aliases = LocalVocabularyAliases.resolve(
+    let resolvedEntries = LocalVocabularyAliases.resolve(
       context.permanentEntries + context.ephemeralEntries
-    ).flatMap(\.aliases)
+    )
+    let canonicalForms = resolvedEntries
+      .filter { ActiveWindowContextSelector.isIdentifierLike($0.canonicalText) }
+      .map {
+        LocalResolvedAlias(
+          text: $0.canonicalText,
+          canonicalText: $0.canonicalText,
+          source: .generated
+        )
+      }
+    let generatedForms = resolvedEntries.flatMap(\.aliases)
       .filter { $0.text.split(whereSeparator: \Character.isWhitespace).count >= 2 }
+    var seenForms: Set<String> = []
+    let aliases = (canonicalForms + generatedForms)
+      .filter { seenForms.insert(LocalVocabularyAliases.comparisonKey($0.text)).inserted }
       .sorted {
         if $0.text.count == $1.text.count {
           return LocalVocabularyAliases.comparisonKey($0.text)

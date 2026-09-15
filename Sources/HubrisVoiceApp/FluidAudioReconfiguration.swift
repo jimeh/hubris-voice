@@ -14,6 +14,12 @@ struct FluidAudioReconfigurationRequest: Sendable {
   let correctionPolicy: LocalCorrectionPolicy
 }
 
+struct FluidAudioConfigurationSnapshot: Sendable {
+  let context: LocalInvocationContext
+  let correctionPolicy: LocalCorrectionPolicy
+  let allowsEphemeralContext: Bool
+}
+
 func prepareFluidAudioReconfiguration(
   request: FluidAudioReconfigurationRequest,
   acquireCorrection: @Sendable () async throws -> FluidAudioCorrectionLease?,

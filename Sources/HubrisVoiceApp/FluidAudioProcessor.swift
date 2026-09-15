@@ -15,6 +15,10 @@ protocol FluidAudioProcessing: Sendable {
     context: LocalInvocationContext,
     correctionPolicy: LocalCorrectionPolicy
   ) async throws
+  func updateCorrection(
+    context: LocalInvocationContext,
+    correctionPolicy: LocalCorrectionPolicy
+  ) async throws
   func reset() async throws
   func append(_ audio: Data) async throws -> String
   func finish() async throws -> FluidAudioProcessResult
@@ -22,6 +26,12 @@ protocol FluidAudioProcessing: Sendable {
 }
 
 actor FluidAudioProcessor: FluidAudioProcessing {
+  private struct CorrectionAssets {
+    let directory: URL
+    let models: CtcModels
+    let tokenizer: CtcTokenizer
+  }
+
   private struct CorrectionPipeline {
     let vocabulary: CustomVocabularyContext
     let spotter: CtcKeywordSpotter
@@ -34,6 +44,7 @@ actor FluidAudioProcessor: FluidAudioProcessing {
     config: UnifiedConfig(leftFrames: 70, chunkFrames: 2, rightFrames: 2)
   )
   private var loadedPrimaryDirectory: URL?
+  private var correctionAssets: CorrectionAssets?
   private var correction: CorrectionPipeline?
   private var samples: [Float] = []
   private var timings: [TokenTiming] = []
@@ -53,10 +64,33 @@ actor FluidAudioProcessor: FluidAudioProcessing {
       try await manager.loadModels(from: normalizedPrimaryDirectory)
       loadedPrimaryDirectory = normalizedPrimaryDirectory
     }
-    guard
-      let correctionDirectory,
-      let configuration = correctionPolicy.configuration,
-      !context.resolvedEntries.isEmpty
+    if let correctionDirectory {
+      let normalizedCorrectionDirectory = correctionDirectory.standardizedFileURL
+      if correctionAssets?.directory != normalizedCorrectionDirectory {
+        do {
+          let models = try await CtcModels.loadDirect(from: normalizedCorrectionDirectory)
+          let tokenizer = try await CtcTokenizer.load(from: normalizedCorrectionDirectory)
+          correctionAssets = CorrectionAssets(
+            directory: normalizedCorrectionDirectory,
+            models: models,
+            tokenizer: tokenizer
+          )
+        } catch {
+          correctionAssets = nil
+        }
+      }
+    } else {
+      correctionAssets = nil
+    }
+    try await updateCorrection(context: context, correctionPolicy: correctionPolicy)
+  }
+
+  func updateCorrection(
+    context: LocalInvocationContext,
+    correctionPolicy: LocalCorrectionPolicy
+  ) async throws {
+    guard let correctionAssets, let configuration = correctionPolicy.configuration,
+          !context.resolvedEntries.isEmpty
     else {
       correction = nil
       return
@@ -64,7 +98,7 @@ actor FluidAudioProcessor: FluidAudioProcessing {
 
     do {
       correction = try await makeCorrectionPipeline(
-        directory: correctionDirectory,
+        assets: correctionAssets,
         entries: context.resolvedEntries,
         configuration: configuration
       )
@@ -74,15 +108,13 @@ actor FluidAudioProcessor: FluidAudioProcessing {
   }
 
   private func makeCorrectionPipeline(
-    directory: URL,
+    assets: CorrectionAssets,
     entries: [LocalVocabularyEntry],
     configuration: LocalCorrectionConfiguration
   ) async throws -> CorrectionPipeline? {
-    let models = try await CtcModels.loadDirect(from: directory)
-    let tokenizer = try await CtcTokenizer.load(from: directory)
     let vocabulary = CustomVocabularyContext(
       terms: entries.compactMap { entry in
-        let tokenIDs = tokenizer.encode(entry.canonicalText)
+        let tokenIDs = assets.tokenizer.encode(entry.canonicalText)
         guard !tokenIDs.isEmpty else { return nil }
         return CustomVocabularyTerm(
           text: entry.canonicalText,
@@ -93,7 +125,7 @@ actor FluidAudioProcessor: FluidAudioProcessing {
       minSimilarity: Float(configuration.minimumSimilarity)
     )
     guard !vocabulary.terms.isEmpty else { return nil }
-    let spotter = CtcKeywordSpotter(models: models, blankId: models.vocabulary.count)
+    let spotter = CtcKeywordSpotter(models: assets.models, blankId: assets.models.vocabulary.count)
     let rescorer = try await VocabularyRescorer.create(
       spotter: spotter,
       vocabulary: vocabulary,
@@ -106,7 +138,7 @@ actor FluidAudioProcessor: FluidAudioProcessing {
         ),
         spotterRescueEnabled: configuration.acousticRescueEnabled
       ),
-      ctcModelDirectory: directory
+      ctcModelDirectory: assets.directory
     )
     return CorrectionPipeline(
       vocabulary: vocabulary,
@@ -153,6 +185,7 @@ actor FluidAudioProcessor: FluidAudioProcessing {
 
   func unload() async {
     loadedPrimaryDirectory = nil
+    correctionAssets = nil
     correction = nil
     samples.removeAll(keepingCapacity: false)
     timings.removeAll(keepingCapacity: false)

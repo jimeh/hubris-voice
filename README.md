@@ -19,7 +19,8 @@ for manual paste. The previous clipboard is restored unless another copy has rep
 - One warm Realtime WebSocket with automatic reconnect and backoff; audio
   recorded while disconnected is replayed once the session is ready
 - Optional English-only on-device streaming on Apple Silicon, with verified model
-  downloads, explicit load/unload controls, and a separate local dictionary
+  downloads, explicit load/unload controls, a separate local dictionary, and
+  opt-in active-window term hints
 - Live transcript preview in a pill placed at the caret, with a 1 to 6 line cap
 - Clipboard insertion with best-effort content confirmation and temporary markers
   that keep automatic transcripts out of compatible clipboard histories
@@ -138,8 +139,14 @@ is retained and the Models tab reports degraded correction.
 
 The Dictionary tab edits the selected engine's vocabulary. The local dictionary
 is initially copied from existing OpenAI terms, then stored separately. Local
-entries and aliases never flow back into OpenAI settings. Automatic Accessibility
-window-context collection is not implemented yet.
+entries and aliases never flow back into OpenAI settings. **Use active-window
+terms** is off by default. When enabled, it uses macOS Accessibility to read a
+bounded set of visible text from the current window after recording starts. It
+selects likely identifiers and unusual names for that local invocation only.
+Captured text and automatic terms are not persisted, logged, placed in history,
+or sent to OpenAI. The feature falls back to the permanent local dictionary when
+Accessibility permission, useful visible text, or timely revalidation is absent.
+It does not change another application's accessibility or screen-reader settings.
 
 Downloaded models live under `~/Library/Application Support/Hubris Voice/Models`.
 Downloads stream into owned staging files and must pass pinned size and SHA-256
@@ -193,16 +200,18 @@ briefs behind the current feature set.
 ## Development insertion trace
 
 Quit Hubris Voice, then run `mise run dev:trace` to build and launch a signed
-**debug** app with an unsanitized insertion trace.
+**debug** app with an unsanitized development trace.
 
 Each traced process writes a separate `development-<pid>-<uuid>.log` under
 `~/Library/Logs/HubrisVoice/`, readable and writable only by your user. These files
-contain raw dictated text and focused-field text before and after insertion.
-They are for development only; delete them after the investigation. They are not
-rotated automatically. Credentials, audio, and previous clipboard contents are
-not recorded. The normal `realtime.log` remains sanitized.
+contain raw dictated text, focused-field text before and after insertion, and
+on-device active-window context including captured fragments, candidates,
+classifications, selected terms, generated aliases, and context lifecycle
+decisions. They are for development only; delete them after the investigation.
+They are not rotated automatically. Credentials, audio, and previous clipboard
+contents are not recorded. The normal `realtime.log` remains sanitized.
 
-The debug-only `--development-trace` launch flag enables tracing for the OpenAI
-engine. Tracing is suppressed while on-device transcription is selected. It is ignored
-by release builds and never saved in preferences. Quit and relaunch normally to
-disable it. Launching an already-running app does not apply new flags.
+The debug-only `--development-trace` launch flag enables tracing for both OpenAI
+and on-device transcription. It is ignored by release builds and never saved in
+preferences. Quit and relaunch normally to disable it. Launching an
+already-running app does not apply new flags.

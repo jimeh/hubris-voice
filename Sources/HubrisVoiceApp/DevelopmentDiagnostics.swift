@@ -13,16 +13,16 @@ enum DevelopmentDiagnostics {
   }
 }
 
-/// Deliberately unsanitized insertion trace, separate from the normal diagnostic log.
-/// Call sites must never pass credentials, audio, or previous clipboard contents.
+/// Deliberately unsanitized trace, separate from the normal diagnostic log.
+/// Call sites may include transcripts and captured window context, but must never pass
+/// credentials, audio, or previous clipboard contents.
 @MainActor
 final class DevelopmentTrace {
   static let shared = DevelopmentTrace()
   private var handle: FileHandle?
-  var localTranscriptionSelected = false
 
   func record(_ message: @autoclosure () -> String) {
-    guard DevelopmentDiagnostics.traceEnabled, !localTranscriptionSelected else { return }
+    guard DevelopmentDiagnostics.traceEnabled else { return }
     do {
       if handle == nil {
         let directory = FileManager.default.homeDirectoryForCurrentUser

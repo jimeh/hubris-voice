@@ -3,8 +3,8 @@
 Hubris Voice's first on-device engine is FluidAudio 0.15.7 with Parakeet Unified
 English, using its 320 ms streaming variant. OpenAI remains the default. The
 local option requires Apple Silicon; cloud operation keeps the macOS 15 app
-baseline. WhisperKit, sherpa-onnx, Apple Speech, additional model variants, and
-Accessibility window-context collection are future work.
+baseline. WhisperKit, sherpa-onnx, Apple Speech, and additional model variants
+are future work.
 
 ## Engine boundary
 
@@ -40,10 +40,33 @@ OpenAI's existing dictionary remains in `transcription.dictionary`.
 `LocalVocabularyStore` writes versioned canonical entries and explicit aliases
 under a separate key. It seeds from cloud terms once, without reverse migration.
 `LocalInvocationContext` separates permanent and ephemeral entries; the cloud
-configuration type does not accept either. There is no window-text collector.
+configuration type does not accept either. The optional Accessibility collector
+creates ephemeral entries for one local invocation. It starts after microphone
+capture, reads the focused window on a bounded background task, and revalidates
+the window and secure-field state during the existing release grace. Context is
+frozen when finish is enqueued. Late, stale, cancelled, and cross-generation
+updates are rejected.
 
-Local dictionary correction defaults to enabled. A saved disabled
-preference is preserved when switching engines. The strict policy uses similarity
+The collector prefers selected, focused, editor-local, and visible-range text.
+It accepts other descendants only with `AXVisibleChildren` or geometry evidence
+through the window and known clipping ancestors. It limits AX messaging time,
+overall time, nodes, depth, characters, and selected terms. It never writes
+`AXManualAccessibility`, invokes target-app commands, or changes screen-reader
+settings. The existing Electron insertion fallback remains separate; context
+capture deliberately resolves its initial anchor without invoking that fallback.
+
+Term selection runs in `HubrisVoiceCore`. Identifier shape, source relevance,
+repetition, and English `NSSpellChecker` evidence rank candidates. Spell-checking
+is a signal rather than a veto because developer identifiers are often accepted
+as ordinary words. Recognized developer filenames such as `AppModel.swift` are
+kept as single candidates and receive aliases for literal and spoken dots. URL,
+domain, path, UUID, hexadecimal, and secret-like noise is discarded. Permanent
+entries win case-insensitive collisions, and at most 40 ephemeral entries are
+retained.
+
+Local dictionary correction defaults to enabled. Active-window terms default to
+disabled, and both saved preferences are preserved when switching engines. The
+strict policy uses similarity
 0.80, acoustic rescue floors 0.80/0.85, rescue enabled, and no short-term taper. These are matching
 parameters, not confidence percentages. Generated identifier aliases and explicit
 spoken aliases feed the native rescorer. The pure acceptance guard permits
@@ -70,9 +93,10 @@ The vendored logger has no output sink in either debug or release builds.
 `mise run lint:vendor` verifies the pinned archive and ordered patches in
 `third-party/vendor/sources.json`, including the documented compiler-compatibility
 fixes. The commit hook checks index/worktree agreement before verifying vendor
-integrity instead of formatting third-party sources. Hubris
-Voice's optional raw development trace is also suppressed while local mode is
-selected. Normal diagnostics contain no local vocabulary or transcript text.
+integrity instead of formatting third-party sources. Hubris Voice's optional,
+debug-only raw development trace records local transcript and active-window
+context details when explicitly enabled with `--development-trace`. Normal
+diagnostics contain no local vocabulary or transcript text.
 
 ## Model storage and attribution
 
@@ -140,3 +164,7 @@ sleep/wake, global shortcut timing, and final-text insertion in real application
 Fresh longer dictation is also needed to evaluate correction precision beyond
 the tuning corpus. The 8-second finalization budget includes local queue delay;
 very long speech with correction can time out and must never insert later.
+Active-window context also needs manual validation in native AppKit, Xcode,
+Terminal, browser editors, and VS Code with `editor.accessibilitySupport` set to
+`off`, `auto`, and `on`. That validation must confirm that Hubris Voice neither
+changes the configured mode nor depends on Screen Reader Optimized mode.
